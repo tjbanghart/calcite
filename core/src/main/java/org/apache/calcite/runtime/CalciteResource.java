@@ -320,6 +320,9 @@ public interface CalciteResource {
   @BaseMessage("OVER clause is necessary for window functions")
   ExInst<SqlValidatorException> absentOverClause();
 
+  @BaseMessage("Argument to function ''{0}'' must be a measure")
+  ExInst<SqlValidatorException> argumentMustBeMeasure(String functionName);
+
   @BaseMessage("Window ''{0}'' not found")
   ExInst<SqlValidatorException> windowNotFound(String a0);
 
@@ -349,6 +352,12 @@ public interface CalciteResource {
 
   @BaseMessage("Aggregate expressions cannot be nested")
   ExInst<SqlValidatorException> nestedAggIllegal();
+
+  @BaseMessage("Measure expressions can only occur within AGGREGATE function")
+  ExInst<SqlValidatorException> measureIllegal();
+
+  @BaseMessage("Measure expressions can only occur within a GROUP BY query")
+  ExInst<SqlValidatorException> measureMustBeInAggregateQuery();
 
   @BaseMessage("FILTER must not contain aggregate expression")
   ExInst<SqlValidatorException> aggregateInFilterIllegal();

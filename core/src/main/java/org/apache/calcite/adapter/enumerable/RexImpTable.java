@@ -115,6 +115,7 @@ import static org.apache.calcite.sql.fun.SqlLibraryOperators.ARRAY_LENGTH;
 import static org.apache.calcite.sql.fun.SqlLibraryOperators.ARRAY_REVERSE;
 import static org.apache.calcite.sql.fun.SqlLibraryOperators.BOOL_AND;
 import static org.apache.calcite.sql.fun.SqlLibraryOperators.BOOL_OR;
+import static org.apache.calcite.sql.fun.SqlLibraryOperators.CHAR;
 import static org.apache.calcite.sql.fun.SqlLibraryOperators.CHR;
 import static org.apache.calcite.sql.fun.SqlLibraryOperators.COMPRESS;
 import static org.apache.calcite.sql.fun.SqlLibraryOperators.CONCAT2;
@@ -366,21 +367,22 @@ public class RexImpTable {
     defineMethod(RIGHT, BuiltInMethod.RIGHT.method, NullPolicy.ANY);
     defineMethod(REPLACE, BuiltInMethod.REPLACE.method, NullPolicy.STRICT);
     defineMethod(TRANSLATE3, BuiltInMethod.TRANSLATE3.method, NullPolicy.STRICT);
-    defineMethod(CHR, "chr", NullPolicy.STRICT);
+    defineMethod(CHR, BuiltInMethod.CHAR_FROM_UTF8.method, NullPolicy.STRICT);
     defineMethod(CHARACTER_LENGTH, BuiltInMethod.CHAR_LENGTH.method,
         NullPolicy.STRICT);
     defineMethod(CHAR_LENGTH, BuiltInMethod.CHAR_LENGTH.method,
         NullPolicy.STRICT);
     defineMethod(OCTET_LENGTH, BuiltInMethod.OCTET_LENGTH.method,
         NullPolicy.STRICT);
-    defineMethod(CONCAT, BuiltInMethod.STRING_CONCAT.method,
-        NullPolicy.STRICT);
+    map.put(CONCAT, new ConcatImplementor());
     defineMethod(CONCAT_FUNCTION, BuiltInMethod.MULTI_STRING_CONCAT.method,
         NullPolicy.STRICT);
     defineMethod(CONCAT2, BuiltInMethod.STRING_CONCAT.method, NullPolicy.STRICT);
     defineMethod(OVERLAY, BuiltInMethod.OVERLAY.method, NullPolicy.STRICT);
     defineMethod(POSITION, BuiltInMethod.POSITION.method, NullPolicy.STRICT);
     defineMethod(ASCII, BuiltInMethod.ASCII.method, NullPolicy.STRICT);
+    defineMethod(CHAR, BuiltInMethod.CHAR_FROM_ASCII.method,
+        NullPolicy.SEMI_STRICT);
     defineMethod(REPEAT, BuiltInMethod.REPEAT.method, NullPolicy.STRICT);
     defineMethod(SPACE, BuiltInMethod.SPACE.method, NullPolicy.STRICT);
     defineMethod(STRCMP, BuiltInMethod.STRCMP.method, NullPolicy.STRICT);
@@ -2696,6 +2698,29 @@ public class RexImpTable {
         );
       }
       return list;
+    }
+  }
+
+  /** Implementor for a array or string concat. */
+  private static class ConcatImplementor extends AbstractRexCallImplementor {
+    private ArrayConcatImplementor arrayConcatImplementor =
+        new ArrayConcatImplementor();
+    private MethodImplementor stringConcatImplementor
+        = new MethodImplementor(BuiltInMethod.STRING_CONCAT.method, NullPolicy.STRICT, false);
+    ConcatImplementor() {
+      super(NullPolicy.STRICT, false);
+    }
+
+    @Override String getVariableName() {
+      return "concat";
+    }
+
+    @Override Expression implementSafe(RexToLixTranslator translator, RexCall call,
+        List<Expression> argValueList) {
+      if (call.type.getSqlTypeName() == SqlTypeName.ARRAY) {
+        return arrayConcatImplementor.implementSafe(translator, call, argValueList);
+      }
+      return stringConcatImplementor.implementSafe(translator, call, argValueList);
     }
   }
 

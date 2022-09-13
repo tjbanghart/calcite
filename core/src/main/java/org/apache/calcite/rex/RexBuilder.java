@@ -27,7 +27,6 @@ import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.rel.type.RelDataTypeField;
 import org.apache.calcite.runtime.FlatLists;
-import org.apache.calcite.runtime.Geometries;
 import org.apache.calcite.sql.SqlAggFunction;
 import org.apache.calcite.sql.SqlCollation;
 import org.apache.calcite.sql.SqlIntervalQualifier;
@@ -60,6 +59,7 @@ import com.google.common.collect.TreeRangeSet;
 
 import org.checkerframework.checker.nullness.qual.Nullable;
 import org.checkerframework.checker.nullness.qual.PolyNull;
+import org.locationtech.jts.geom.Geometry;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
@@ -642,6 +642,9 @@ public class RexBuilder {
 
   boolean canRemoveCastFromLiteral(RelDataType toType, @Nullable Comparable value,
       SqlTypeName fromTypeName) {
+    if (value == null) {
+      return true;
+    }
     final SqlTypeName sqlType = toType.getSqlTypeName();
     if (!RexLiteral.valueMatchesType(value, sqlType, false)) {
       return false;
@@ -676,6 +679,26 @@ public class RexBuilder {
     if (toType.getSqlTypeName() == SqlTypeName.DECIMAL) {
       final BigDecimal decimalValue = (BigDecimal) value;
       return SqlTypeUtil.isValidDecimalValue(decimalValue, toType);
+    }
+
+    if (SqlTypeName.INT_TYPES.contains(sqlType)) {
+      final BigDecimal decimalValue = (BigDecimal) value;
+      final int s = decimalValue.scale();
+      if (s != 0) {
+        return false;
+      }
+      long l = decimalValue.longValue();
+      switch (sqlType) {
+      case TINYINT:
+        return l >= Byte.MIN_VALUE && l <= Byte.MAX_VALUE;
+      case SMALLINT:
+        return l >= Short.MIN_VALUE && l <= Short.MAX_VALUE;
+      case INTEGER:
+        return l >= Integer.MIN_VALUE && l <= Integer.MAX_VALUE;
+      case BIGINT:
+      default:
+        return true;
+      }
     }
 
     return true;
@@ -1811,7 +1834,7 @@ public class RexBuilder {
       return typeFactory.createSqlType(SqlTypeName.BINARY,
           ((ByteString) value).length());
     }
-    if (value instanceof Geometries.Geom) {
+    if (value instanceof Geometry) {
       return typeFactory.createSqlType(SqlTypeName.GEOMETRY);
     }
     throw new AssertionError("unknown type " + value.getClass());

@@ -146,7 +146,7 @@ the JIRA case number, like this:
 [CALCITE-345] AssertionError in RexToLixTranslator comparing to date literal
 {% endhighlight %}
 
-If your change had multiple commits, use `git rebase -i master` to
+If your change had multiple commits, use `git rebase -i main` to
 squash them into a single commit, and to bring your code up to date
 with the latest on the main line.
 
@@ -171,7 +171,7 @@ the implementation ("Add handler for FileNotFound").
  surmise that the purpose of your change is to fix the bug.
 
 Then push your commit(s) to GitHub, and create a pull request from
-your branch to the calcite master branch. Update the JIRA case
+your branch to the calcite main branch. Update the JIRA case
 to reference your pull request, and a committer will review your
 changes.
 
@@ -309,7 +309,7 @@ so it is better to stick with `org.checkerframework.checker.nullness.qual.Nullab
 
 ## Continuous Integration Testing
 
-Calcite exploits [GitHub actions](https://github.com/apache/calcite/actions?query=branch%3Amaster)
+Calcite exploits [GitHub actions](https://github.com/apache/calcite/actions?query=branch%3Amain)
 and [Travis](https://app.travis-ci.com/github/apache/calcite) for continuous integration testing.
 In the past, there were also Jenkins jobs on the [ASF-hosted](https://builds.apache.org/)
 infrastructure, but they are not maintained anymore.
@@ -329,9 +329,54 @@ such as a bug fix or a [Jira task that we have labeled
 "newbie"](https://issues.apache.org/jira/issues/?jql=labels%20%3D%20newbie%20%26%20project%20%3D%20Calcite%20%26%20status%20%3D%20Open).
 Follow the [contributing guidelines](#contributing) to get your change committed.
 
-After you have made several useful contributions we may
-[invite you to become a committer](https://community.apache.org/contributors/).
 We value all contributions that help to build a vibrant community, not just code.
-You can contribute by testing the code, helping verify a release,
-writing documentation or the web site,
-or just by answering questions on the list.
+You can contribute by testing the code, helping verify a release, writing documentation, improving
+the web site, or just by answering questions on the list.
+
+After you have made several useful contributions we may invite you to become a [committer](https://community.apache.org/contributors/).
+The most common way of becoming a committer is by contributing regularly to the project. In some
+exceptional cases you can bypass the invitation process as described below.
+
+If you are a committer in another **ASF project** (such as Drill, Flink, Hive, Ignite, Phoenix, etc.)
+and you are familiar with the Calcite codebase you can request explicitly from the Calcite PMC to
+consider your for committership. You can do that by sending an email to [private@calcite.apache.org](mailto:private@calcite.apache.org)
+including the following information (template below):
+* Apache ID, you must have one if you are committer;
+* links to commits, discussions, presentations, blogs, etc., demonstrating your experience with
+Calcite.
+
+{% highlight text %}
+Subject: [REQUEST] New committer: Stamatis Zampetakis
+To: private@calcite.apache.org
+
+Hi all,
+
+My name is Stamatis Zampetakis and my Apache ID is zabetak:
+https://home.apache.org/phonebook.html?uid=zabetak
+
+I am a Hive committer and have been working with Calcite for the past 2 years.
+I contributed various improvements and fixes in the cost based optimizer of
+Hive, which relies on Calcite, and I am pretty familiar with the Calcite
+codebase. Below you can find a list of contributions in the Hive repo that are
+related with Calcite:
+
+* https://github.com/apache/hive/commit/f29cb2245c97102975ea0dd73783049eaa0947a0
+* https://github.com/apache/hive/commit/efae863fe010ed5c4b7de1874a336ed93b3c60b8
+* https://github.com/apache/hive/commit/587c698fa25ca6da46d9c02e4199689426fec40f
+* https://github.com/apache/hive/commit/9087fa93cd785223f4f2552ec836e7580c78830a
+* https://github.com/apache/hive/commit/0616bcaa2436ccbf388b635bfea160b47849553c
+* https://github.com/apache/hive/commit/6f7c55ab9bc4fd7c3d0c2a6ba3095275b17b3d2d
+* https://github.com/apache/hive/commit/a0faf5ecb196a20cfef64d554df54961e8c074a7
+* https://github.com/apache/hive/commit/4f4cbeda00d5ebb7d0b8cedee5daa2c03df4a755
+* https://github.com/apache/hive/commit/6f2b8883c44edcf57538f3b1da2c5a599b0c5862
+* https://github.com/apache/hive/commit/170d5b4c3edf2daaa47ef3299277d44def4d39a7
+
+I would like to become a Calcite committer and help the project as much as I can.
+
+Best,
+Stamatis
+
+{% endhighlight %}
+
+After receiving your email the PMC will evaluate your request and get back to you in 1-2 weeks
+(usually a vote for adding a new committer takes ~7days).

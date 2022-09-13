@@ -28,7 +28,7 @@ immediately, but we want to deploy documentation of project features only when t
 in a release.
 
 The building and publishing of the website is completely automated using Github actions, so you should simply commit
-your changes to master. If you are committing a change to the website that needs to be published immediately, the
+your changes to main. If you are committing a change to the website that needs to be published immediately, the
 Github action uses these [rules](../.github/workflows/publish-non-release-website-updates.yml#L7).
 
 # Previewing the website locally
@@ -93,3 +93,11 @@ You can preview your work while working on the site.
 The web server will be started on [http://localhost:4000](http://localhost:4000)
 
 As you make changes to the site, the site will automatically rebuild.
+
+# Publishing the website
+
+Publishing the website is usually simple, you just need to copy the newly generated site content to the [calcite-site](https://github.com/apache/calcite-site) repository.
+
+But sometimes, especially when we upgraded Jekyll version, the `js` and `css` files may be renamed or removed, copying will not remove these stale files in calcite-site.
+
+Hence, a safer way is to remove the old files in calcite-site for the first step, then do the copying.

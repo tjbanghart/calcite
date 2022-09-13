@@ -475,6 +475,10 @@ public abstract class RelOptUtil {
    * or {@code newRel} directly if one of them are not {@link Hintable}
    */
   public static RelNode copyRelHints(RelNode originalRel, RelNode newRel, boolean filterHints) {
+    if (originalRel == newRel && !filterHints) {
+      return originalRel;
+    }
+
     if (originalRel instanceof Hintable
         && newRel instanceof Hintable
         && ((Hintable) originalRel).getHints().size() > 0) {
@@ -1383,41 +1387,6 @@ public abstract class RelOptUtil {
               rightKey =
                   rexBuilder.makeCast(targetKeyType, rightKey);
             }
-          }
-        }
-      }
-
-      if ((rangeOp == null)
-          && ((leftKey == null) || (rightKey == null))) {
-        // no equality join keys found yet:
-        // try transforming the condition to
-        // equality "join" conditions, e.g.
-        //     f(LHS) > 0 ===> ( f(LHS) > 0 ) = TRUE,
-        // and make the RHS produce TRUE, but only if we're strictly
-        // looking for equi-joins
-        final ImmutableBitSet projRefs = InputFinder.bits(condition);
-        leftKey = null;
-        rightKey = null;
-
-        boolean foundInput = false;
-        for (int i = 0; i < inputs.size() && !foundInput; i++) {
-          if (inputsRange[i].contains(projRefs)) {
-            leftInput = i;
-            leftFields = inputs.get(leftInput).getRowType().getFieldList();
-
-            leftKey = condition.accept(
-                new RelOptUtil.RexInputConverter(
-                    rexBuilder,
-                    leftFields,
-                    leftFields,
-                    adjustments));
-
-            rightKey = rexBuilder.makeLiteral(true);
-
-            // effectively performing an equality comparison
-            kind = SqlKind.EQUALS;
-
-            foundInput = true;
           }
         }
       }

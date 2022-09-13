@@ -405,8 +405,11 @@ class RexProgramTest extends RexProgramTestBase {
 
     // If i0 is null, then "i0 is not null" is false
     RexNode i0NotNull = isNotNull(i0);
+    RexNode i1NotNull = isNotNull(i1);
     assertThat(Strong.isNull(i0NotNull, c0), is(false));
     assertThat(Strong.isNotTrue(i0NotNull, c0), is(true));
+    assertThat(Strong.isNotTrue(or(i0NotNull, i1NotNull), c01), is(true));
+    assertThat(Strong.isNotTrue(and(i0NotNull, i1NotNull), c1), is(true));
 
     // If i0 is null, then "not(i0 is not null)" is true.
     // Join-strengthening relies on this.
@@ -1443,11 +1446,16 @@ class RexProgramTest extends RexProgramTestBase {
         "true");
 
     // "a = 1 or a <> 2" could (and should) be simplified to "a <> 2"
-    // but can't do that right now
     checkSimplifyFilter(
         or(eq(aRef, literal1),
             ne(aRef, literal2)),
-        "OR(=(?0.a, 1), <>(?0.a, 2))");
+        "<>(?0.a, 2)");
+
+    // "a < 1 or a > 1" ==> "a <> 1"
+    checkSimplifyFilter(
+        or(lt(aRef, literal1),
+            gt(aRef, literal1)),
+        "<>(?0.a, 1)");
 
     // "(a >= 1 and a <= 3) or a <> 2", or equivalently
     // "a between 1 and 3 or a <> 2" ==> "true"

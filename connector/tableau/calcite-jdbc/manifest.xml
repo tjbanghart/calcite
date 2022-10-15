@@ -1,0 +1,56 @@
+<?xml version='1.0' encoding='utf-8' ?>
+<!--
+  ~ Licensed to the Apache Software Foundation (ASF) under one or more
+  ~ contributor license agreements.  See the NOTICE file distributed with
+  ~ this work for additional information regarding copyright ownership.
+  ~ The ASF licenses this file to you under the Apache License, Version 2.0
+  ~ (the "License"); you may not use this file except in compliance with
+  ~ the License.  You may obtain a copy of the License at
+  ~
+  ~ http://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing, software
+  ~ distributed under the License is distributed on an "AS IS" BASIS,
+  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  ~ See the License for the specific language governing permissions and
+  ~ limitations under the License.
+  -->
+<connector-plugin class='calcite-jdbc' superclass='jdbc' plugin-version='0.0.0' name='Apache Calcite JDBC' version='18.1' min-version-tableau='2020.4'>
+  <vendor-information>
+      <company name="Apache"/>
+      <support-link url="https://calcite.apache.org"/>
+      <driver-download-link url="https://search.maven.org/artifact/org.apache.calcite.avatica/avatica-core/1.19.0/jar"/>
+  </vendor-information>
+  <connection-customization class="calcite-jdbc" enabled="true" version="10.0">
+    <vendor name="Apache Software Foundation"/>
+    <driver name="Calcite JDBC Driver"/>
+    <customizations>
+      <customization name="CAP_SUPPRESS_TEMP_TABLE_CHECKS" value="yes"/>
+      <customization name="CAP_SELECT_INTO" value="no"/>
+      <customization name="CAP_SELECT_TOP_INTO" value="no"/>
+      <customization name="CAP_CREATE_TEMP_TABLES" value="no"/>
+      <customization name="CAP_TEMP_TABLES_NOT_SESSION_SCOPED" value="no"/>
+      <customization name="CAP_QUERY_BOOLEXPR_TO_INTEXPR" value="no"/>
+      <customization name="CAP_QUERY_GROUP_BY_BOOL" value="yes"/>
+      <customization name="CAP_QUERY_GROUP_BY_DEGREE" value="yes"/>
+      <customization name="CAP_QUERY_SORT_BY" value="yes"/>
+      <customization name="CAP_QUERY_SUBQUERIES" value="yes"/>
+      <customization name="CAP_QUERY_TOP_N" value="yes"/>
+      <customization name="CAP_QUERY_TOP_SAMPLE" value="yes"/>
+      <customization name="CAP_QUERY_TOP_SAMPLE_PERCENT" value="yes"/>
+      <customization name="CAP_QUERY_WHERE_FALSE_METADATA" value="yes"/>
+      <customization name="CAP_QUERY_SUBQUERIES_WITH_TOP" value="yes"/>
+      <customization name="CAP_SUPPORTS_SPLIT_FROM_LEFT" value="yes"/>
+      <customization name="CAP_SUPPORTS_SPLIT_FROM_RIGHT" value="yes"/>
+      <customization name="CAP_SUPPORTS_UNION" value="yes"/>
+      <customization name="CAP_QUERY_ALLOW_PARTIAL_AGGREGATION" value="no"/>
+      <customization name="CAP_QUERY_TIME_REQUIRES_CAST" value="yes"/>
+    </customizations>
+  </connection-customization>
+  <connection-fields file="connectionFields.xml"/>
+  <connection-metadata file="connectionMetadata.xml"/>
+  <connection-resolver file="connectionResolver.tdr"/>
+  <dialect file="dialect.tdd"/>
+  <oauth-config file='oauthConfig.xml'/>
+</connector-plugin>
+

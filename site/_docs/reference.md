@@ -1,4 +1,3 @@
-
 ---
 layout: docs
 title: SQL language
@@ -1014,8 +1013,10 @@ TIES,
 **TIMESTAMP**,
 TIMESTAMPADD,
 TIMESTAMPDIFF,
+TIMESTAMP_TRUNC,
 **TIMEZONE_HOUR**,
 **TIMEZONE_MINUTE**,
+TIME_TRUNC,
 **TINYINT**,
 **TO**,
 TOP_LEVEL_COUNT,
@@ -1129,7 +1130,7 @@ name will have been converted to upper case also.
 | NUMERIC     | Fixed point               |
 | REAL, FLOAT | 4 byte floating point     | 6 decimal digits precision
 | DOUBLE      | 8 byte floating point     | 15 decimal digits precision
-| CHAR(n), CHARACTER(n) | Fixed-width character string | 'Hello', '' (empty string), _latin1'Hello', n'Hello', _UTF16'Hello', 'Hello' 'there' (literal split into multiple parts)
+| CHAR(n), CHARACTER(n) | Fixed-width character string | 'Hello', '' (empty string), _latin1'Hello', n'Hello', _UTF16'Hello', 'Hello' 'there' (literal split into multiple parts), e'Hello\nthere' (literal containing C-style escapes)
 | VARCHAR(n), CHARACTER VARYING(n) | Variable-length character string | As CHAR(n)
 | BINARY(n)   | Fixed-width binary string | x'45F0AB', x'' (empty binary string), x'AB' 'CD' (multi-part binary string literal)
 | VARBINARY(n), BINARY VARYING(n) | Variable-length binary string | As BINARY(n)
@@ -1521,23 +1522,24 @@ Calcite type conversions. The table shows all possible conversions,
 without regard to the context in which it is made. The rules governing
 these details follow the table.
 
-| FROM - TO           | NULL | BOOLEAN | TINYINT | SMALLINT | INT | BIGINT | DECIMAL | FLOAT or REAL | DOUBLE | INTERVAL | DATE | TIME | TIMESTAMP | CHAR or VARCHAR | BINARY or VARBINARY
-|:------------------- |:---- |:------- |:------- |:-------- |:--- |:------ |:------- |:------------- |:------ |:-------- |:---- |:---- |:--------- |:--------------- |:-----------
-| NULL                | i    | i       | i       | i        | i   | i      | i       | i             | i      | i        | i    | i    | i         | i               | i
-| BOOLEAN             | x    | i       | e       | e        | e   | e      | e       | e             | e      | x        | x    | x    | x         | i               | x
-| TINYINT             | x    | e       | i       | i        | i   | i      | i       | i             | i      | e        | x    | x    | e         | i               | x
-| SMALLINT            | x    | e       | i       | i        | i   | i      | i       | i             | i      | e        | x    | x    | e         | i               | x
-| INT                 | x    | e       | i       | i        | i   | i      | i       | i             | i      | e        | x    | x    | e         | i               | x
-| BIGINT              | x    | e       | i       | i        | i   | i      | i       | i             | i      | e        | x    | x    | e         | i               | x
-| DECIMAL             | x    | e       | i       | i        | i   | i      | i       | i             | i      | e        | x    | x    | e         | i               | x
-| FLOAT/REAL          | x    | e       | i       | i        | i   | i      | i       | i             | i      | x        | x    | x    | e         | i               | x
-| DOUBLE              | x    | e       | i       | i        | i   | i      | i       | i             | i      | x        | x    | x    | e         | i               | x
-| INTERVAL            | x    | x       | e       | e        | e   | e      | e       | x             | x      | i        | x    | x    | x         | e               | x
-| DATE                | x    | x       | x       | x        | x   | x      | x       | x             | x      | x        | i    | x    | i         | i               | x
-| TIME                | x    | x       | x       | x        | x   | x      | x       | x             | x      | x        | x    | i    | e         | i               | x
-| TIMESTAMP           | x    | x       | e       | e        | e   | e      | e       | e             | e      | x        | i    | e    | i         | i               | x
-| CHAR or VARCHAR     | x    | e       | i       | i        | i   | i      | i       | i             | i      | i        | i    | i    | i         | i               | i
-| BINARY or VARBINARY | x    | x       | x       | x        | x   | x      | x       | x             | x      | x        | e    | e    | e         | i               | i
+| FROM - TO           | NULL | BOOLEAN | TINYINT | SMALLINT | INT | BIGINT | DECIMAL | FLOAT or REAL | DOUBLE | INTERVAL | DATE | TIME | TIMESTAMP | CHAR or VARCHAR | BINARY or VARBINARY | GEOMETRY
+|:--------------------|:---- |:------- |:------- |:-------- |:--- |:------ |:------- |:------------- |:------ |:-------- |:-----|:-----|:----------|:--------------- |:--------------------|:--------
+| NULL                | i    | i       | i       | i        | i   | i      | i       | i             | i      | i        | i    | i    | i         | i               | i                   | i
+| BOOLEAN             | x    | i       | e       | e        | e   | e      | e       | e             | e      | x        | x    | x    | x         | i               | x                   | x
+| TINYINT             | x    | e       | i       | i        | i   | i      | i       | i             | i      | e        | x    | x    | e         | i               | x                   | x
+| SMALLINT            | x    | e       | i       | i        | i   | i      | i       | i             | i      | e        | x    | x    | e         | i               | x                   | x
+| INT                 | x    | e       | i       | i        | i   | i      | i       | i             | i      | e        | x    | x    | e         | i               | x                   | x
+| BIGINT              | x    | e       | i       | i        | i   | i      | i       | i             | i      | e        | x    | x    | e         | i               | x                   | x
+| DECIMAL             | x    | e       | i       | i        | i   | i      | i       | i             | i      | e        | x    | x    | e         | i               | x                   | x
+| FLOAT/REAL          | x    | e       | i       | i        | i   | i      | i       | i             | i      | x        | x    | x    | e         | i               | x                   | x
+| DOUBLE              | x    | e       | i       | i        | i   | i      | i       | i             | i      | x        | x    | x    | e         | i               | x                   | x
+| INTERVAL            | x    | x       | e       | e        | e   | e      | e       | x             | x      | i        | x    | x    | x         | e               | x                   | x
+| DATE                | x    | x       | x       | x        | x   | x      | x       | x             | x      | x        | i    | x    | i         | i               | x                   | x
+| TIME                | x    | x       | x       | x        | x   | x      | x       | x             | x      | x        | x    | i    | e         | i               | x                   | x
+| TIMESTAMP           | x    | x       | e       | e        | e   | e      | e       | e             | e      | x        | i    | e    | i         | i               | x                   | x
+| CHAR or VARCHAR     | x    | e       | i       | i        | i   | i      | i       | i             | i      | i        | i    | i    | i         | i               | i                   | i
+| BINARY or VARBINARY | x    | x       | x       | x        | x   | x      | x       | x             | x      | x        | e    | e    | e         | i               | i                   | x
+| GEOMETRY            | x    | x       | x       | x        | x   | x      | x       | x             | x      | x        | x    | x    | x         | i               | x                   | i
 
 i: implicit cast / e: explicit cast / x: not allowed
 
@@ -2300,6 +2302,7 @@ Not implemented:
 |:- |:-------------------- |:-----------
 | o | ST_Contains(geom1, geom2) | Returns whether *geom1* contains *geom2*
 | p | ST_ContainsProperly(geom1, geom2) | Returns whether *geom1* contains *geom2* but does not intersect its boundary
+| p | ST_CoveredBy(geom1, geom2) | Returns whether no point in *geom1* is outside *geom2*.
 | p | ST_Covers(geom1, geom2) | Returns whether no point in *geom2* is outside *geom1*
 | o | ST_Crosses(geom1, geom2) | Returns whether *geom1* crosses *geom2*
 | o | ST_Disjoint(geom1, geom2) | Returns whether *geom1* and *geom2* are disjoint
@@ -2635,6 +2638,8 @@ semantics.
 | b | TIMESTAMP_MICROS(integer)                      | Returns the TIMESTAMP that is *integer* microseconds after 1970-01-01 00:00:00
 | b | TIMESTAMP_MILLIS(integer)                      | Returns the TIMESTAMP that is *integer* milliseconds after 1970-01-01 00:00:00
 | b | TIMESTAMP_SECONDS(integer)                     | Returns the TIMESTAMP that is *integer* seconds after 1970-01-01 00:00:00
+| b | TIMESTAMP_TRUNC(timestamp, timeUnit)           | Truncates a *timestamp* value to the granularity of *timeUnit*. The *timestamp* value is always rounded to the beginning of the *timeUnit*.
+| b | TIME_TRUNC(time, timeUnit)                     | Truncates a *time* value to the granularity of *timeUnit*. The *time* value is always rounded to the beginning of timeUnit, which can be one of the following: MILLISECOND, SECOND, MINUTE, HOUR.
 | o p | TO_DATE(string, format)                      | Converts *string* to a date using the format *format*
 | o p | TO_TIMESTAMP(string, format)                 | Converts *string* to a timestamp using the format *format*
 | o p | TRANSLATE(expr, fromString, toString)        | Returns *expr* with all occurrences of each character in *fromString* replaced by its corresponding character in *toString*. Characters in *expr* that are not in *fromString* are not replaced

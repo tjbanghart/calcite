@@ -126,6 +126,7 @@ import org.apache.calcite.tools.RuleSets;
 import org.apache.calcite.util.ImmutableBitSet;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 
 import org.immutables.value.Value;
 import org.junit.jupiter.api.Disabled;
@@ -170,15 +171,13 @@ import static org.junit.jupiter.api.Assertions.fail;
  * for details on the schema.
  *
  * <li>Run the test. It should fail. Inspect the output in
- * {@code target/surefire/.../RelOptRulesTest.xml}.
- * (If you are running using maven and this file does not exist, add a
- * {@code -X} flag to the maven command line.)
+ * {@code build/resources/.../RelOptRulesTest.xml}.
  *
  * <li>Verify that the "planBefore" is the correct
  * translation of your SQL, and that it contains the pattern on which your rule
  * is supposed to fire. If all is well, replace
  * {@code src/test/resources/.../RelOptRulesTest.xml} and
- * with the new {@code target/surefire/.../RelOptRulesTest.xml}.
+ * with the new {@code build/resources/.../RelOptRulesTest.xml}.
  *
  * <li>Run the test again. It should fail again, but this time it should contain
  * a "planAfter" entry for your rule. Verify that your rule applied its
@@ -3940,6 +3939,17 @@ class RelOptRulesTest extends RelOptTestBase {
         .check();
   }
 
+  @Test void testPullConstantThroughUnionSameTypeNullableField() {
+    final String sql = "select deptno, ename from empnullables where deptno = 1\n"
+        + "union all\n"
+        + "select deptno, ename from empnullables where deptno = 1";
+    sql(sql)
+        .withTrim(true)
+        .withRule(CoreRules.UNION_PULL_UP_CONSTANTS,
+            CoreRules.PROJECT_MERGE)
+        .check();
+  }
+
   @Test void testAggregateProjectMerge() {
     final String sql = "select x, sum(z), y from (\n"
         + "  select deptno as x, empno as y, sal as z, sal * 2 as zz\n"
@@ -6883,7 +6893,7 @@ class RelOptRulesTest extends RelOptTestBase {
         RelNode input,
         List<? extends RexNode> projects,
         RelDataType rowType) {
-      super(cluster, traitSet, ImmutableList.of(), input, projects, rowType);
+      super(cluster, traitSet, ImmutableList.of(), input, projects, rowType, ImmutableSet.of());
     }
 
     public MyProject copy(RelTraitSet traitSet, RelNode input,

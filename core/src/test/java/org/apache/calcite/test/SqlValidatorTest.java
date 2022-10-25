@@ -63,6 +63,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Ordering;
 
 import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -6253,7 +6254,7 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
   /** Test case for
    * <a href="https://issues.apache.org/jira/browse/CALCITE-5171">[CALCITE-5171]
    * NATURAL join and USING should fail if join columns are not unique</a>. */
-  @Test void testNaturalJoinDuplicateColumns() {
+  @Test void testJoinDuplicateColumns() {
     // NATURAL join and USING should fail if join columns are not unique
     final String message = "Column name 'DEPTNO' in NATURAL join or "
         + "USING clause is not unique on one side of join";
@@ -6269,13 +6270,6 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
         + "  using (^deptno^)")
         .fails(message);
 
-    // Also with "*". (Proves that FROM is validated before SELECT.)
-    sql("select *\n"
-        + "from emp\n"
-        + "left join (select deptno, name as deptno from dept)\n"
-        + "  using (^deptno^)")
-        .fails(message);
-
     // Reversed query gives reversed error message
     sql("select e.ename, d.name\n"
         + "from (select ename, sal as deptno, deptno from emp) as e\n"
@@ -6283,12 +6277,63 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
         + "  using (^deptno^)")
         .fails(message);
 
+    // Also with "*". (Proves that FROM is validated before SELECT.)
+    sql("select *\n"
+        + "from emp\n"
+        + "left join (select deptno, name as deptno from dept)\n"
+        + "  using (^deptno^)")
+        .fails(message);
+  }
+
+  @Test @DisplayName("Natural join require input column uniqueness")
+  void testNaturalJoinRequireInputColumnUniqueness() {
+    final String message = "Column name 'DEPTNO' in NATURAL join or "
+        + "USING clause is not unique on one side of join";
+    // Invalid. NATURAL JOIN eliminates duplicate columns from its output but
+    // requires input columns to be unique.
+    sql("select *\n"
+        + "from (emp as e cross join dept as d)\n"
+        + "^natural^ join\n"
+        + "(emp as e2 cross join dept as d2)")
+        .fails(message);
+  }
+
+  @Test @DisplayName("Should produce two DEPTNO columns")
+  void testReturnsCorrectRowTypeOnCombinedJoin() {
+    sql("select *\n"
+        + "from emp as e\n"
+        + "natural join dept as d\n"
+        + "join (select deptno as x, deptno from dept) as d2"
+        + "  on d2.deptno = e.deptno")
+        .type("RecordType("
+            + "INTEGER NOT NULL DEPTNO, "
+            + "INTEGER NOT NULL EMPNO, "
+            + "VARCHAR(20) NOT NULL ENAME, "
+            + "VARCHAR(10) NOT NULL JOB, "
+            + "INTEGER MGR, "
+            + "TIMESTAMP(0) NOT NULL HIREDATE, "
+            + "INTEGER NOT NULL SAL, "
+            + "INTEGER NOT NULL COMM, "
+            + "BOOLEAN NOT NULL SLACKER, "
+            + "VARCHAR(10) NOT NULL NAME, "
+            + "INTEGER NOT NULL X, "
+            + "INTEGER NOT NULL DEPTNO1) NOT NULL");
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-5171">[CALCITE-5171]
+   * NATURAL join and USING should fail if join columns are not unique</a>. */
+  @Test void testCorrectJoinDuplicateColumns() {
     // The error only occurs if the duplicate column is referenced. The
     // following query has a duplicate hiredate column.
     sql("select e.ename, d.name\n"
         + "from dept as d\n"
         + "join (select ename, sal as hiredate, deptno from emp) as e\n"
         + "  using (deptno)")
+        .ok();
+
+    // Previous join chain does not affect validation.
+    sql("select * from EMP natural join EMPNULLABLES natural join DEPT")
         .ok();
   }
 
@@ -6437,9 +6482,7 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
         + "from emp as e\n"
         + "join dept as d using (deptno)\n"
         + "join dept as d2 using (^deptno^)";
-    final String expected = "Column name 'DEPTNO' in NATURAL join or "
-        + "USING clause is not unique on one side of join";
-    sql(sql1).fails(expected);
+    sql(sql1).ok();
 
     final String sql2 = "select *\n"
         + "from emp as e\n"
@@ -7383,6 +7426,13 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
         + "group by rollup(empno), deptno")
         .ok()
         .type("RecordType(INTEGER NOT NULL DEPTNO, INTEGER EMPNO) NOT NULL");
+
+    // empno becomes NULL because it is rolled up, and so does empno + 1.
+    sql("select empno, empno + 1 as e1\n"
+        + "from emp\n"
+        + "group by rollup(empno)")
+        .ok()
+        .type("RecordType(INTEGER EMPNO, INTEGER E1) NOT NULL");
   }
 
   @Test void testGroupByCorrelatedColumn() {
@@ -8937,6 +8987,11 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
         + "select min(deptno) from dept as depts2)").ok();
   }
 
+  @Test void dynamicParameterType() {
+    expr("CAST(? AS INTEGER)")
+        .columnType("INTEGER");
+  }
+
   @Test void testRecordType() {
     // Have to qualify columns with table name.
     sql("SELECT ^coord^.x, coord.y FROM customer.contact")
@@ -9300,6 +9355,19 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
                 + " CATALOG.SALES.EMP.HIREDATE,"
                 + " null,"
                 + " null}"));
+
+    sql("select e.empno from dept_nested, unnest(employees) as e")
+        .assertFieldOrigin(
+            is("{CATALOG.SALES.DEPT_NESTED.EMPLOYEES.EMPNO}"));
+
+    sql("select * from UNNEST(ARRAY['a', 'b'])")
+        .assertFieldOrigin(is("{null}"));
+
+    sql("select * from UNNEST(ARRAY['a', 'b'], ARRAY['d', 'e'])")
+        .assertFieldOrigin(is("{null, null}"));
+
+    sql("select dpt.skill.desc from dept_nested as dpt")
+        .assertFieldOrigin(is("{CATALOG.SALES.DEPT_NESTED.SKILL.DESC}"));
   }
 
   @Test void testBrackets() {

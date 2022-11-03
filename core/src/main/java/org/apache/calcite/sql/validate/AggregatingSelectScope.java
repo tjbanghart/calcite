@@ -20,7 +20,6 @@ import org.apache.calcite.linq4j.Linq4j;
 import org.apache.calcite.linq4j.Ord;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.sql.SqlCall;
-import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.sql.SqlNode;
 import org.apache.calcite.sql.SqlNodeList;
 import org.apache.calcite.sql.SqlSelect;
@@ -30,7 +29,6 @@ import org.apache.calcite.util.Litmus;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMultiset;
 
 import java.util.List;

@@ -7866,6 +7866,7 @@ SqlPostfixOperator PostfixRowOperator() :
 |   < ROWS: "ROWS" >
 |   < RUNNING: "RUNNING" >
 |   < SAVEPOINT: "SAVEPOINT" >
+|   < BReAK: "Break">
 |   < SCALAR: "SCALAR" >
 |   < SCALE: "SCALE" >
 |   < SCHEMA: "SCHEMA" >

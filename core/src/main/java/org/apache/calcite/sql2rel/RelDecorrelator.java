@@ -227,7 +227,7 @@ public class RelDecorrelator implements ReflectiveVisitor {
     }
 
     if (!decorrelator.cm.mapCorToCorRel.isEmpty()) {
-      newRootRel = decorrelator.decorrelate(newRootRel);
+     newRootRel = decorrelator.decorrelate(newRootRel);
     }
 
     // Re-propagate the hints.

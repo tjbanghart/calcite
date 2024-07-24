@@ -219,6 +219,7 @@ public class HepPlanner extends AbstractRelOptPlanner {
         // instructions, while keeping the highwater memory usage
         // proportional to the graph size.
         collectGarbage();
+        System.out.println("================================");
       }
     });
   }

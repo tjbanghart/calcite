@@ -343,10 +343,15 @@ public class Programs {
         RelTraitSet requiredOutputTraits,
         List<RelOptMaterialization> materializations,
         List<RelOptLattice> lattices) {
+      System.out.println("========START REL============\n" + rel.explain());
       for (Program program : programs) {
+        System.out.println("================");
+        System.out.println("PROGRAM: " + program.toString());
         rel =
             program.run(planner, rel, requiredOutputTraits, materializations,
                 lattices);
+        System.out.println("OUTPUT REL\n" + rel.explain());
+        System.out.println("================");
       }
       return rel;
     }

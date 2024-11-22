@@ -158,6 +158,10 @@ public final class SqlBasicFunction extends SqlFunction {
   @Override public boolean isDeterministic() {
     return deterministic;
   }
+  
+  @Override public @Nullable SqlOperator reverse() {
+    return isSymmetrical() ? this : null;
+  }
 
   @Override public SqlMonotonicity getMonotonicity(SqlOperatorBinding call) {
     return monotonicityInference.apply(call);

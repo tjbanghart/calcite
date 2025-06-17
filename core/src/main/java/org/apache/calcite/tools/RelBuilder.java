@@ -38,6 +38,7 @@ import org.apache.calcite.rel.core.Aggregate;
 import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.calcite.rel.core.Correlate;
 import org.apache.calcite.rel.core.CorrelationId;
+import org.apache.calcite.rel.core.Combine;
 import org.apache.calcite.rel.core.Filter;
 import org.apache.calcite.rel.core.Intersect;
 import org.apache.calcite.rel.core.Join;
@@ -5276,5 +5277,30 @@ public class RelBuilder {
   private interface RegisterAgg {
     RexInputRef registerAgg(SqlAggFunction op, List<RexNode> operands,
         RelDataType type, @Nullable String name);
+  }
+
+  /** Creates a {@link Combine} of the top {@code n} relational expressions
+   * on the stack. */
+  public RelBuilder combine(int n) {
+      final List<RelNode> inputs = new ArrayList<>();
+      for (int i = 0; i < n; i++) {
+          inputs.add(0, peek(i));
+      }
+      return push(struct.combineFactory.createCombine(cluster, inputs));
+  }
+
+  /** Creates a {@link Combine} of all relational expressions on the stack. */
+  public RelBuilder combine() {
+      return combine(size());
+  }
+
+  /** Creates a {@link Combine} of the given relational expressions. */
+  public RelBuilder combine(RelNode... inputs) {
+      return push(struct.combineFactory.createCombine(cluster, Arrays.asList(inputs)));
+  }
+
+  /** Creates a {@link Combine} of the given relational expressions. */
+  public RelBuilder combine(Iterable<? extends RelNode> inputs) {
+      return push(struct.combineFactory.createCombine(cluster, ImmutableList.copyOf(inputs)));
   }
 }

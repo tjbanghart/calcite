@@ -31,6 +31,7 @@ import org.apache.calcite.rel.RelDistributions;
 import org.apache.calcite.rel.RelFieldCollation;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.AggregateCall;
+import org.apache.calcite.rel.core.Combine;
 import org.apache.calcite.rel.core.Correlate;
 import org.apache.calcite.rel.core.CorrelationId;
 import org.apache.calcite.rel.core.Exchange;
@@ -5556,6 +5557,45 @@ public class RelBuilderTest {
         + "LogicalFilter(condition=[NOT(SIMILAR TO($1, 'a%b%c'))])\n"
         + "  LogicalTableScan(table=[[scott, EMP]])\n";
     assertThat(root, hasTree(expected));
+  }
+
+
+  @Test void testCombine() {
+    // Create two separate queries
+    final RelBuilder builder = RelBuilder.create(config().build());
+    RelNode scan1 = builder.scan("EMP")
+        .filter(builder.equals(builder.field("DEPTNO"), builder.literal(10)))
+        .project(builder.field("ENAME"))
+        .build();
+    RelNode scan2 = builder.scan("EMP")
+        .filter(builder.equals(builder.field("DEPTNO"), builder.literal(20)))
+        .project(builder.field("SAL"))
+        .build();
+
+    // Test combine with varargs
+    RelNode combine1 = builder.combine(scan1, scan2).build();
+    assertThat(combine1, instanceOf(Combine.class));
+    assertThat(combine1.getInputs().size(), is(2));
+
+    // Test combine with Iterable
+    RelNode combine2 = builder.combine(Arrays.asList(scan1, scan2)).build();
+    assertThat(combine2, instanceOf(Combine.class));
+    assertThat(combine2.getInputs().size(), is(2));
+
+    // Test combine with stack
+    builder.push(scan1)
+        .push(scan2);
+    RelNode combine3 = builder.combine(2).build();
+    assertThat(combine3, instanceOf(Combine.class));
+    assertThat(((Combine) combine3).getInputs().size(), is(2));
+
+    // Test combine with all stack
+    builder.clear();
+    builder.push(scan1)
+        .push(scan2);
+    RelNode combine4 = builder.combine().build();
+    assertThat(combine4, instanceOf(Combine.class));
+    assertThat(combine4.getInputs().size(), is(2));
   }
 
   /** Test case for

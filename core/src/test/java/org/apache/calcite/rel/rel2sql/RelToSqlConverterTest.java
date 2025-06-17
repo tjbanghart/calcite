@@ -2516,6 +2516,47 @@ class RelToSqlConverterTest {
   }
 
   /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-7056">[CALCITE-7056]
+   * Convert RelNode to Sql failed when the RelNode includes quantify operators</a>.
+   */
+  @Test void testQuantifyOperatorsWithTypeCoercion() {
+    final String query = "SELECT '1970-01-01 01:23:45'"
+        + " = any (array[timestamp '1970-01-01 01:23:45',"
+        + "timestamp '1970-01-01 01:23:46'])";
+    final String expected = "SELECT TIMESTAMP '1970-01-01 01:23:45' ="
+        + " SOME ARRAY[TIMESTAMP '1970-01-01 01:23:45', TIMESTAMP '1970-01-01 01:23:46']\n"
+        + "FROM (VALUES (0)) AS \"t\" (\"ZERO\")";
+    sql(query).withCalcite().ok(expected);
+
+    final String query1 = "SELECT 1, \"gross_weight\" < SOME(SELECT \"gross_weight\" "
+        + "FROM \"foodmart\".\"product\") AS \"t\" "
+        + "FROM \"foodmart\".\"product\"";
+    final String expected1 = "SELECT 1, \"gross_weight\" < SOME (SELECT \"gross_weight\"\n"
+        + "FROM \"foodmart\".\"product\") AS \"t\"\nFROM \"foodmart\".\"product\"";
+    sql(query1).withCalcite().ok(expected1);
+
+    final String query2 = "SELECT 1 = SOME (ARRAY[2,3,null])";
+    final String expected2 = "SELECT 1 = SOME ARRAY[2, 3, NULL]\n"
+        + "FROM (VALUES (0)) AS \"t\" (\"ZERO\")";
+    sql(query2).withCalcite().ok(expected2);
+
+    final String query3 =
+        "WITH tb(a) as (VALUES "
+            + "(ARRAY[timestamp '1970-01-01 01:23:45', timestamp '1970-01-01 01:23:46'])) "
+            + "SELECT timestamp '1970-01-01 01:23:45' >= some (a) FROM tb";
+    final String expected3 = "SELECT TIMESTAMP '1970-01-01 01:23:45'"
+        + " >= SOME ARRAY[TIMESTAMP '1970-01-01 01:23:45', TIMESTAMP '1970-01-01 01:23:46']\n"
+        + "FROM (VALUES (0)) AS \"t\" (\"ZERO\")";
+    sql(query3).withCalcite().ok(expected3);
+
+    final String query4 = "SELECT 1.0 = SOME (VALUES (1.0), (2.0))";
+    final String expected4 = "SELECT 1.0 IN "
+        + "(SELECT *\nFROM (VALUES (1.0),\n(2.0)) AS \"t\" (\"EXPR$0\"))\n"
+        + "FROM (VALUES (0)) AS \"t\" (\"ZERO\")";
+    sql(query4).withCalcite().ok(expected4);
+  }
+
+  /** Test case for
    * <a href="https://issues.apache.org/jira/browse/CALCITE-7055">[CALCITE-7055]
    * Invalid unparse for cast to array type in StarRocks</a>.
    */
@@ -9926,6 +9967,82 @@ class RelToSqlConverterTest {
     sql(query)
         .withPresto().ok(expected)
         .withTrino().ok(expected);
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-7048">[CALCITE-7048]
+   * Derived types with FLOAT type arguments are handled incorrectly in Presto</a>. */
+  @Test void testPrestoFloatingPointNestedTypesCast() {
+    // Map test
+    String query = "SELECT CAST(MAP[1.0,MAP[3.0,4.0]]"
+        + " AS MAP<FLOAT, MAP<FLOAT, FLOAT>>)"
+        + " FROM \"employee\"";
+    String expectedPresto = "SELECT CAST(MAP (ARRAY[1.0], ARRAY[MAP (ARRAY[3.0], ARRAY[4.0])])"
+        + " AS MAP< DOUBLE, MAP< DOUBLE, DOUBLE > >)\n"
+        + "FROM \"foodmart\".\"employee\"";
+    sql(query)
+        .withPresto()
+        .ok(expectedPresto);
+
+    String query1 = "SELECT CAST(MAP[1.0,2.0]"
+        + " AS MAP<FLOAT, FLOAT>)"
+        + " FROM \"employee\"";
+    String expectedPresto1 = "SELECT CAST(MAP (ARRAY[1.0], ARRAY[2.0])"
+        + " AS MAP< DOUBLE, DOUBLE >)\n"
+        + "FROM \"foodmart\".\"employee\"";
+    sql(query1)
+        .withPresto()
+        .ok(expectedPresto1);
+
+    String query2 = "SELECT CAST(MAP[1.0,\"department_id\"]"
+        + " AS MAP<FLOAT, BINARY>)"
+        + " FROM \"employee\"";
+    String expectedPresto2 = "SELECT CAST(MAP (ARRAY[1.0], ARRAY[\"department_id\"])"
+        + " AS MAP< DOUBLE, VARBINARY >)\n"
+        + "FROM \"foodmart\".\"employee\"";
+    sql(query2)
+        .withPresto()
+        .ok(expectedPresto2);
+
+    String query3 = "SELECT CAST(MAP[MAP[3.0,4.0],1.0]"
+        + " AS MAP<MAP<FLOAT, FLOAT>, FLOAT>)"
+        + " FROM \"employee\"";
+    String expectedPresto3 = "SELECT CAST(MAP (ARRAY[MAP (ARRAY[3.0], ARRAY[4.0])], ARRAY[1.0])"
+        + " AS MAP< MAP< DOUBLE, DOUBLE >, DOUBLE >)\nFROM \"foodmart\".\"employee\"";
+    sql(query3)
+        .withPresto()
+        .ok(expectedPresto3);
+
+    // Array test
+    String query4 = "SELECT CAST(ARRAY[1.0,2.0,3.0]"
+        + " AS FLOAT ARRAY)"
+        + " FROM \"employee\"";
+    String expectedPresto4 = "SELECT CAST(ARRAY[1.0, 2.0, 3.0] AS DOUBLE ARRAY)\n"
+        + "FROM \"foodmart\".\"employee\"";
+    sql(query4)
+        .withPresto()
+        .ok(expectedPresto4);
+
+    String query5 = "SELECT CAST(ARRAY[ARRAY[1.0],ARRAY[2.0],ARRAY[3.0]]"
+        + " AS FLOAT ARRAY ARRAY)"
+        + " FROM \"employee\"";
+    String expectedPresto5 = "SELECT CAST(ARRAY[ARRAY[1.0], ARRAY[2.0], ARRAY[3.0]]"
+        + " AS DOUBLE ARRAY ARRAY)\n"
+        + "FROM \"foodmart\".\"employee\"";
+    sql(query5)
+        .withPresto()
+        .ok(expectedPresto5);
+
+    String query6 = "SELECT CAST(ARRAY[MAP[1.0,2.0],MAP[2.0,2.0],MAP[3.0,3.0]]"
+        + " AS MAP<REAL,FLOAT> ARRAY)"
+        + " FROM \"employee\"";
+    String expectedPresto6 = "SELECT CAST(ARRAY["
+        + "MAP (ARRAY[1.0], ARRAY[2.0]), MAP (ARRAY[2.0], ARRAY[2.0]), MAP (ARRAY[3.0], ARRAY[3.0])"
+        + "] AS MAP< REAL, DOUBLE > ARRAY)\n"
+        + "FROM \"foodmart\".\"employee\"";
+    sql(query6)
+        .withPresto()
+        .ok(expectedPresto6);
   }
 
   /** Test case for

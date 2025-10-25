@@ -29,14 +29,12 @@ JOIN cte2 c2 ON c1.deptno = c2.deptno]]>
       <![CDATA[
 LogicalProject(DEPTNO=[$0], CNT=[$1], AVG_SAL=[$3])
   LogicalJoin(condition=[=($0, $2)], joinType=[inner])
-    LogicalTableSpool(readType=[EAGER], writeType=[LAZY], table=[[CTE1]])
-      LogicalAggregate(group=[{0}], CNT=[COUNT()])
-        LogicalProject(DEPTNO=[$7])
-          LogicalTableScan(table=[[CATALOG, SALES, EMP]])
-    LogicalTableSpool(readType=[EAGER], writeType=[LAZY], table=[[CTE2]])
-      LogicalAggregate(group=[{0}], AVG_SAL=[AVG($1)])
-        LogicalProject(DEPTNO=[$7], SAL=[$5])
-          LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+    LogicalAggregate(group=[{0}], CNT=[COUNT()])
+      LogicalProject(DEPTNO=[$7])
+        LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+    LogicalAggregate(group=[{0}], AVG_SAL=[AVG($1)])
+      LogicalProject(DEPTNO=[$7], SAL=[$5])
+        LogicalTableScan(table=[[CATALOG, SALES, EMP]])
 ]]>
     </Resource>
     <Resource name="planAfter">

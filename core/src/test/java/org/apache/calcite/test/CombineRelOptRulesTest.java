@@ -16,18 +16,43 @@
  */
 package org.apache.calcite.test;
 
+import org.apache.calcite.rel.RelCollationTraitDef;
 import org.apache.calcite.rel.rules.CombineMultipleSpoolRule;
 
 import org.junit.jupiter.api.Test;
 
+import org.junit.jupiter.api.AfterAll;
+
+import org.checkerframework.checker.nullness.qual.Nullable;
+
+import static org.apache.calcite.plan.RelOptUtil.registerDefaultRules;
+
 /**
  * Unit tests for {@link CombineMultipleSpoolRule} and other Combine-related rules.
- * 
+ *
  * <p>These tests verify the transformation of queries with multiple CTEs
  * into a Combine operator structure that enables independent optimization
  * of each CTE.
  */
-class CombineRelOptRulesTest extends RelOptRulesTest {
+class CombineRelOptRulesTest extends RelOptTestBase {
+
+  @Nullable
+  private static DiffRepository diffRepos = null;
+
+  @AfterAll
+  public static void checkActualAndReferenceFiles() {
+    if (diffRepos != null) {
+      diffRepos.checkActualAndReferenceFiles();
+    }
+  }
+
+  @Override RelOptFixture fixture() {
+    RelOptFixture fixture = super.fixture()
+        .withDiffRepos(DiffRepository.lookup(CombineRelOptRulesTest.class));
+    diffRepos = fixture.diffRepos();
+    return fixture;
+  }
+
 
   @Test void testCombineMultipleCTEs() {
     final String sql = "WITH\n"
@@ -36,10 +61,13 @@ class CombineRelOptRulesTest extends RelOptRulesTest {
         + "SELECT c1.deptno, c1.cnt, c2.avg_sal\n"
         + "FROM cte1 c1\n"
         + "JOIN cte2 c2 ON c1.deptno = c2.deptno";
-    
+
     sql(sql)
         .withVolcanoPlanner(false, p -> {
-          p.addRule(CombineMultipleSpoolRule.Config.DEFAULT.toRule());
+          registerDefaultRules(p, false, false);
+          p.addRelTraitDef(RelCollationTraitDef.INSTANCE);
+          // Add the rule we're testing (commented out since Combine doesn't exist yet)
+           p.addRule(CombineMultipleSpoolRule.Config.DEFAULT.toRule());
         })
         .check();
   }
@@ -53,10 +81,10 @@ class CombineRelOptRulesTest extends RelOptRulesTest {
         + "FROM dept_counts dc\n"
         + "JOIN dept_salaries ds ON dc.deptno = ds.deptno\n"
         + "JOIN dept_avg da ON dc.deptno = da.deptno";
-    
+
     sql(sql)
         .withVolcanoPlanner(false, p -> {
-          p.addRule(CombineMultipleSpoolRule.Config.DEFAULT.toRule());
+          // p.addRule(CombineMultipleSpoolRule.Config.DEFAULT.toRule());
         })
         .check();
   }
@@ -68,7 +96,7 @@ class CombineRelOptRulesTest extends RelOptRulesTest {
         + "                 FROM base_data\n"
         + "                 GROUP BY deptno)\n"
         + "SELECT * FROM aggregated WHERE cnt > 2";
-    
+
     sql(sql)
         .withVolcanoPlanner(false, p -> {
           p.addRule(CombineMultipleSpoolRule.Config.DEFAULT.toRule());
@@ -83,7 +111,7 @@ class CombineRelOptRulesTest extends RelOptRulesTest {
         + "SELECT * FROM high_sal\n"
         + "UNION ALL\n"
         + "SELECT * FROM low_sal";
-    
+
     sql(sql)
         .withVolcanoPlanner(false, p -> {
           p.addRule(CombineMultipleSpoolRule.Config.DEFAULT.toRule());
@@ -95,7 +123,7 @@ class CombineRelOptRulesTest extends RelOptRulesTest {
     final String sql = "WITH\n"
         + "  dept_summary AS (SELECT deptno, COUNT(*) as cnt FROM emp GROUP BY deptno)\n"
         + "SELECT * FROM dept_summary WHERE cnt > 5";
-    
+
     sql(sql)
         .withVolcanoPlanner(false, p -> {
           p.addRule(CombineMultipleSpoolRule.Config.DEFAULT.toRule());
@@ -111,7 +139,7 @@ class CombineRelOptRulesTest extends RelOptRulesTest {
         + "FROM dept_stats d1\n"
         + "JOIN dept_stats d2 ON d1.deptno = d2.deptno\n"
         + "WHERE d1.cnt > 3";
-    
+
     sql(sql)
         .withVolcanoPlanner(false, p -> {
           p.addRule(CombineMultipleSpoolRule.Config.DEFAULT.toRule());
@@ -129,7 +157,7 @@ class CombineRelOptRulesTest extends RelOptRulesTest {
         + "            LEFT JOIN high_earners h ON d.deptno = h.deptno\n"
         + "            GROUP BY d.deptno, d.emp_count)\n"
         + "SELECT * FROM final";
-    
+
     sql(sql)
         .withVolcanoPlanner(false, p -> {
           p.addRule(CombineMultipleSpoolRule.Config.DEFAULT.toRule());

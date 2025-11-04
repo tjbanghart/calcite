@@ -58,8 +58,7 @@ class CombineRelOptRulesTest extends RelOptTestBase {
     };
 
     relFn(relFn)
-        .withVolcanoPlanner(false, p ->
-            p.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule()))
+        .withRule(CombineSharedComponentsRule.Config.DEFAULT.toRule())
         .check();
   }
 
@@ -235,15 +234,15 @@ class CombineRelOptRulesTest extends RelOptTestBase {
   }
 
   @Test void testUnionToDistinctRuleWithRelBuilder() {
-    // Convert the SQL test "select * from dept union select * from dept" 
+    // Convert the SQL test "select * from dept union select * from dept"
     // to use RelBuilder with Volcano planner
     final Function<RelBuilder, RelNode> relFn = b -> {
       // First scan of DEPT
       b.scan("DEPT");
-      
+
       // Second scan of DEPT
       b.scan("DEPT");
-      
+
       // Create UNION (not UNION ALL)
       return b.union(false).build();
     };
@@ -260,10 +259,10 @@ class CombineRelOptRulesTest extends RelOptTestBase {
     final Function<RelBuilder, RelNode> relFn = b -> {
       // First scan of DEPT
       b.scan("DEPT");
-      
-      // Second scan of DEPT  
+
+      // Second scan of DEPT
       b.scan("DEPT");
-      
+
       // Create UNION (not UNION ALL)
       return b.union(false).build();
     };

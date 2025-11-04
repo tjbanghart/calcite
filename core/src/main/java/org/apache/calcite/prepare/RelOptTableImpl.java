@@ -89,7 +89,7 @@ public class RelOptTableImpl extends Prepare.AbstractPreparingTable {
    * count. Now the materialized table can tell the same lie. */
   private final @Nullable Double rowCount;
 
-  private RelOptTableImpl(
+  protected RelOptTableImpl(
       @Nullable RelOptSchema schema,
       RelDataType rowType,
       List<String> names,

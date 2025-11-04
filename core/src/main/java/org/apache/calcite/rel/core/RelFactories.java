@@ -714,7 +714,7 @@ public class RelFactories {
    */
   public interface CombineFactory {
     /** Creates a {@link Combine}. */
-    RelNode createCombine(RelOptCluster cluster, List<RelNode> inputs);
+    RelNode createCombine(List<RelNode> inputs);
   }
 
   /**
@@ -722,8 +722,8 @@ public class RelFactories {
    * {@link Combine}.
    */
   private static class CombineFactoryImpl implements CombineFactory {
-    @Override public RelNode createCombine(RelOptCluster cluster, List<RelNode> inputs) {
-      return Combine.create(cluster, cluster.traitSet(), inputs);
+    @Override public RelNode createCombine(List<RelNode> inputs) {
+      return Combine.create(inputs);
     }
   }
 

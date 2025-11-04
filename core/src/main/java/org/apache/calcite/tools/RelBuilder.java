@@ -5404,9 +5404,9 @@ public class RelBuilder {
   public RelBuilder combine(int n) {
     final List<RelNode> inputs = new ArrayList<>();
     for (int i = 0; i < n; i++) {
-      inputs.add(0, build());
+      inputs.add(0, peek(i));
     }
-    return push(struct.combineFactory.createCombine(cluster, inputs));
+    return push(struct.combineFactory.createCombine(inputs));
   }
 
   /** Creates a {@link Combine} of all relational expressions on the stack. */
@@ -5416,11 +5416,11 @@ public class RelBuilder {
 
   /** Creates a {@link Combine} of the given relational expressions. */
   public RelBuilder combine(RelNode... inputs) {
-    return push(struct.combineFactory.createCombine(cluster, Arrays.asList(inputs)));
+    return push(struct.combineFactory.createCombine(Arrays.asList(inputs)));
   }
 
   /** Creates a {@link Combine} of the given relational expressions. */
   public RelBuilder combine(Iterable<? extends RelNode> inputs) {
-    return push(struct.combineFactory.createCombine(cluster, ImmutableList.copyOf(inputs)));
+    return push(struct.combineFactory.createCombine(ImmutableList.copyOf(inputs)));
   }
 }

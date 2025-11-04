@@ -97,14 +97,7 @@ public class Combine extends AbstractRelNode {
     RelDataTypeFactory typeFactory = getCluster().getTypeFactory();
     RelDataTypeFactory.Builder builder = typeFactory.builder();
 
-    for (int i = 0; i < inputs.size(); i++) {
-      RelNode input = inputs.get(i);
-      // Create a field for each input with its row type
-      // Field names are "QUERY_0", "QUERY_1", etc.
-      builder.add("QUERY_" + i, input.getRowType());
-    }
-
-    return builder.build();
+    return builder.buildDynamic();
   }
 
   @Override public RelOptCost computeSelfCost(RelOptPlanner planner, RelMetadataQuery mq) {

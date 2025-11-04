@@ -27,14 +27,12 @@ Combine
     <Resource name="planAfter">
       <![CDATA[
 Combine
-  LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7])
+  LogicalTableSpool(readType=[LAZY], writeType=[EAGER], table=[[TEMP, spool_0]])
     LogicalTableScan(table=[[scott, EMP]])
-  LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7])
-    LogicalTableScan(table=[[scott, EMP]])
+  LogicalTableScan(table=[[TEMP, spool_0]])
 ]]>
     </Resource>
   </TestCase>
-  
   <TestCase name="testCombineScansWithDifferentFilters">
     <Resource name="planBefore">
       <![CDATA[
@@ -49,15 +47,13 @@ Combine
       <![CDATA[
 Combine
   LogicalFilter(condition=[>($5, 3000)])
-    LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7])
-      LogicalTableScan(table=[[scott, EMP]])
+    LogicalTableScan(table=[[scott, EMP]])
   LogicalFilter(condition=[=($7, 10)])
-    LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7])
-      LogicalTableScan(table=[[scott, EMP]])
+    LogicalTableScan(table=[[scott, EMP]])
 ]]>
     </Resource>
   </TestCase>
-  
+
   <TestCase name="testCombineQueriesWithDifferentProjections">
     <Resource name="planBefore">
       <![CDATA[
@@ -72,15 +68,13 @@ Combine
       <![CDATA[
 Combine
   LogicalProject(EMPNO=[$0], ENAME=[$1])
-    LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7])
-      LogicalTableScan(table=[[scott, EMP]])
+    LogicalTableScan(table=[[scott, EMP]])
   LogicalProject(DEPTNO=[$7], SAL=[$5], COMM=[$6])
-    LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7])
-      LogicalTableScan(table=[[scott, EMP]])
+    LogicalTableScan(table=[[scott, EMP]])
 ]]>
     </Resource>
   </TestCase>
-  
+
   <TestCase name="testCombineAggregateQueries">
     <Resource name="planBefore">
       <![CDATA[
@@ -95,15 +89,13 @@ Combine
       <![CDATA[
 Combine
   LogicalAggregate(group=[{7}], CNT=[COUNT()])
-    LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7])
-      LogicalTableScan(table=[[scott, EMP]])
+    LogicalTableScan(table=[[scott, EMP]])
   LogicalAggregate(group=[{2}], AVG_SAL=[AVG($5)], MAX_SAL=[MAX($5)])
-    LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7])
-      LogicalTableScan(table=[[scott, EMP]])
+    LogicalTableScan(table=[[scott, EMP]])
 ]]>
     </Resource>
   </TestCase>
-  
+
   <TestCase name="testCombineThreeIndependentQueries">
     <Resource name="planBefore">
       <![CDATA[
@@ -119,19 +111,16 @@ Combine
     <Resource name="planAfter">
       <![CDATA[
 Combine
-  LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7])
-    LogicalTableScan(table=[[scott, EMP]])
+  LogicalTableScan(table=[[scott, EMP]])
   LogicalProject(EMPNO=[$0], SAL=[$5])
     LogicalFilter(condition=[>($5, 2000)])
-      LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7])
-        LogicalTableScan(table=[[scott, EMP]])
-  LogicalAggregate(group=[{7}], TOTAL_SAL=[SUM($5)])
-    LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7])
       LogicalTableScan(table=[[scott, EMP]])
+  LogicalAggregate(group=[{7}], TOTAL_SAL=[SUM($5)])
+    LogicalTableScan(table=[[scott, EMP]])
 ]]>
     </Resource>
   </TestCase>
-  
+
   <TestCase name="testCombineDifferentTables">
     <Resource name="planBefore">
       <![CDATA[
@@ -152,7 +141,7 @@ Combine
 ]]>
     </Resource>
   </TestCase>
-  
+
   <TestCase name="testCombineWithSort">
     <Resource name="planBefore">
       <![CDATA[
@@ -168,16 +157,14 @@ Combine
       <![CDATA[
 Combine
   LogicalSort(sort0=[$5], dir0=[DESC])
-    LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7])
-      LogicalTableScan(table=[[scott, EMP]])
+    LogicalTableScan(table=[[scott, EMP]])
   LogicalSort(sort0=[$1], dir0=[ASC])
     LogicalAggregate(group=[{7}], CNT=[COUNT()])
-      LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7])
-        LogicalTableScan(table=[[scott, EMP]])
+      LogicalTableScan(table=[[scott, EMP]])
 ]]>
     </Resource>
   </TestCase>
-  
+
   <TestCase name="testSingleQueryNoCombine">
     <Resource name="planBefore">
       <![CDATA[
@@ -192,7 +179,7 @@ LogicalFilter(condition=[>($5, 1000)])
 ]]>
     </Resource>
   </TestCase>
-  
+
   <TestCase name="testCombineAllOnStack">
     <Resource name="planBefore">
       <![CDATA[
@@ -206,12 +193,10 @@ Combine
     <Resource name="planAfter">
       <![CDATA[
 Combine
-  LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7])
-    LogicalTableScan(table=[[scott, EMP]])
+  LogicalTableScan(table=[[scott, EMP]])
   LogicalTableScan(table=[[scott, DEPT]])
   LogicalFilter(condition=[IS NOT NULL($3)])
-    LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7])
-      LogicalTableScan(table=[[scott, EMP]])
+    LogicalTableScan(table=[[scott, EMP]])
 ]]>
     </Resource>
   </TestCase>

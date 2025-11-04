@@ -47,9 +47,10 @@ Combine
       <![CDATA[
 Combine
   LogicalFilter(condition=[>($5, 3000)])
-    LogicalTableScan(table=[[scott, EMP]])
+    LogicalTableSpool(readType=[LAZY], writeType=[EAGER], table=[[TEMP, spool_0]])
+      LogicalTableScan(table=[[scott, EMP]])
   LogicalFilter(condition=[=($7, 10)])
-    LogicalTableScan(table=[[scott, EMP]])
+    LogicalTableScan(table=[[TEMP, spool_0]])
 ]]>
     </Resource>
   </TestCase>
@@ -68,9 +69,10 @@ Combine
       <![CDATA[
 Combine
   LogicalProject(EMPNO=[$0], ENAME=[$1])
-    LogicalTableScan(table=[[scott, EMP]])
+    LogicalTableSpool(readType=[LAZY], writeType=[EAGER], table=[[TEMP, spool_0]])
+      LogicalTableScan(table=[[scott, EMP]])
   LogicalProject(DEPTNO=[$7], SAL=[$5], COMM=[$6])
-    LogicalTableScan(table=[[scott, EMP]])
+    LogicalTableScan(table=[[TEMP, spool_0]])
 ]]>
     </Resource>
   </TestCase>

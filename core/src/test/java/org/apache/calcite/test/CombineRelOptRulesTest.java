@@ -78,7 +78,7 @@ class CombineRelOptRulesTest extends RelOptTestBase {
                          b.literal(10)));
 
       // Combine the two filtered queries
-      return b.combine(2).build();
+      return b.combine().build();
     };
 
     relFn(relFn)

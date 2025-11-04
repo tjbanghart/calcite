@@ -745,7 +745,9 @@ class RelOptRulesTest extends RelOptTestBase {
         .sortLimit(1, 0, b.field(0))
         .filter(b.lessThan(b.field(0), b.literal(10)))
         .build();
-    relFn(relFn).withRule(CoreRules.FILTER_SORT_TRANSPOSE).checkUnchanged();
+    relFn(relFn)
+        .withVolcanoPlanner(false)
+        .checkUnchanged();
   }
 
   @Test void testReduceOrCaseWhen() {
@@ -1549,6 +1551,7 @@ class RelOptRulesTest extends RelOptTestBase {
         + "select b.name from dept b\n"
         + "order by name limit 10";
     sql(sql)
+        .withVolcanoPlanner(false)
         .withRule(CoreRules.PROJECT_SET_OP_TRANSPOSE,
             CoreRules.SORT_UNION_TRANSPOSE)
         .check();

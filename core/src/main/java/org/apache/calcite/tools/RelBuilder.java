@@ -5404,7 +5404,7 @@ public class RelBuilder {
   public RelBuilder combine(int n) {
     final List<RelNode> inputs = new ArrayList<>();
     for (int i = 0; i < n; i++) {
-      inputs.add(0, peek(i));
+      inputs.add(0, build());
     }
     return push(struct.combineFactory.createCombine(cluster, inputs));
   }

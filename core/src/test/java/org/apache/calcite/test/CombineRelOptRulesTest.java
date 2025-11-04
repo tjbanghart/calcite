@@ -16,152 +16,261 @@
  */
 package org.apache.calcite.test;
 
-import org.apache.calcite.rel.RelCollationTraitDef;
-import org.apache.calcite.rel.rules.CombineMultipleSpoolRule;
+import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.rules.CombineSharedComponentsRule;
+import org.apache.calcite.rel.rules.CoreRules;
+import org.apache.calcite.sql.fun.SqlStdOperatorTable;
+import org.apache.calcite.tools.RelBuilder;
 
 import org.junit.jupiter.api.Test;
 
-import org.junit.jupiter.api.AfterAll;
-
-import org.checkerframework.checker.nullness.qual.Nullable;
-
-import static org.apache.calcite.plan.RelOptUtil.registerDefaultRules;
+import java.util.function.Function;
 
 /**
- * Unit tests for {@link CombineMultipleSpoolRule} and other Combine-related rules.
+ * Unit tests for {@link CombineSharedComponentsRule} and other Combine-related rules.
  *
- * <p>These tests verify the transformation of queries with multiple CTEs
+ * <p>These tests verify the transformation of multiple independent queries
  * into a Combine operator structure that enables independent optimization
- * of each CTE.
+ * of each query branch.
+ *
+ * <p>Note: The CombineSharedComponentsRule currently only detects shared components
+ * but doesn't transform them yet. Full spool-based optimization would be implemented
+ * in a production version.
  */
 class CombineRelOptRulesTest extends RelOptTestBase {
 
-  @Nullable
-  private static DiffRepository diffRepos = null;
-
-  @AfterAll
-  public static void checkActualAndReferenceFiles() {
-    if (diffRepos != null) {
-      diffRepos.checkActualAndReferenceFiles();
-    }
-  }
-
   @Override RelOptFixture fixture() {
-    RelOptFixture fixture = super.fixture()
+    return super.fixture()
         .withDiffRepos(DiffRepository.lookup(CombineRelOptRulesTest.class));
-    diffRepos = fixture.diffRepos();
-    return fixture;
   }
 
+  @Test void testCombineTwoSimpleScans() {
+    // Two independent queries that just scan the same table
+    final Function<RelBuilder, RelNode> relFn = b -> {
+      // Query 1: SELECT * FROM EMP
+      b.scan("EMP");
 
-  @Test void testCombineMultipleCTEs() {
-    final String sql = "WITH\n"
-        + "  cte1 AS (SELECT deptno, COUNT(*) as cnt FROM emp GROUP BY deptno),\n"
-        + "  cte2 AS (SELECT deptno, AVG(sal) as avg_sal FROM emp GROUP BY deptno)\n"
-        + "SELECT c1.deptno, c1.cnt, c2.avg_sal\n"
-        + "FROM cte1 c1\n"
-        + "JOIN cte2 c2 ON c1.deptno = c2.deptno";
+      // Query 2: SELECT * FROM EMP (same scan, but independent query)
+      b.scan("EMP");
 
-    sql(sql)
-        .withVolcanoPlanner(false, p -> {
-          registerDefaultRules(p, false, false);
-          p.addRelTraitDef(RelCollationTraitDef.INSTANCE);
-          // Add the rule we're testing (commented out since Combine doesn't exist yet)
-           p.addRule(CombineMultipleSpoolRule.Config.DEFAULT.toRule());
-        })
+      // Combine the two queries on the stack
+      return b.combine(2).build();
+    };
+
+    relFn(relFn)
+        .withVolcanoPlanner(false, p ->
+            p.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule()))
         .check();
   }
 
-  @Test void testCombineThreeCTEs() {
-    final String sql = "WITH\n"
-        + "  dept_counts AS (SELECT deptno, COUNT(*) as cnt FROM emp GROUP BY deptno),\n"
-        + "  dept_salaries AS (SELECT deptno, SUM(sal) as total_sal FROM emp GROUP BY deptno),\n"
-        + "  dept_avg AS (SELECT deptno, AVG(sal) as avg_sal FROM emp GROUP BY deptno)\n"
-        + "SELECT dc.deptno, dc.cnt, ds.total_sal, da.avg_sal\n"
-        + "FROM dept_counts dc\n"
-        + "JOIN dept_salaries ds ON dc.deptno = ds.deptno\n"
-        + "JOIN dept_avg da ON dc.deptno = da.deptno";
+  @Test void testCombineScansWithDifferentFilters() {
+    // Two independent queries with different filters resulting in different row counts
+    final Function<RelBuilder, RelNode> relFn = b -> {
+      // Query 1: SELECT * FROM EMP WHERE SAL > 3000
+      b.scan("EMP")
+          .filter(b.call(SqlStdOperatorTable.GREATER_THAN,
+                         b.field("SAL"),
+                         b.literal(3000)));
 
-    sql(sql)
-        .withVolcanoPlanner(false, p -> {
-          // p.addRule(CombineMultipleSpoolRule.Config.DEFAULT.toRule());
-        })
+      // Query 2: SELECT * FROM EMP WHERE DEPTNO = 10
+      b.scan("EMP")
+          .filter(b.call(SqlStdOperatorTable.EQUALS,
+                         b.field("DEPTNO"),
+                         b.literal(10)));
+
+      // Combine the two filtered queries
+      return b.combine(2).build();
+    };
+
+    relFn(relFn)
+        .withRule(CombineSharedComponentsRule.Config.DEFAULT.toRule())
         .check();
   }
 
-  @Test void testCombineNestedCTEs() {
-    final String sql = "WITH\n"
-        + "  base_data AS (SELECT * FROM emp WHERE deptno IN (10, 20)),\n"
-        + "  aggregated AS (SELECT deptno, COUNT(*) as cnt, AVG(sal) as avg_sal\n"
-        + "                 FROM base_data\n"
-        + "                 GROUP BY deptno)\n"
-        + "SELECT * FROM aggregated WHERE cnt > 2";
+  @Test void testCombineQueriesWithDifferentProjections() {
+    // Two queries with different projections - different row types
+    final Function<RelBuilder, RelNode> relFn = b -> {
+      // Query 1: SELECT EMPNO, ENAME FROM EMP
+      b.scan("EMP")
+          .project(b.field("EMPNO"), b.field("ENAME"));
 
-    sql(sql)
-        .withVolcanoPlanner(false, p -> {
-          p.addRule(CombineMultipleSpoolRule.Config.DEFAULT.toRule());
-        })
+      // Query 2: SELECT DEPTNO, SAL, COMM FROM EMP
+      b.scan("EMP")
+          .project(b.field("DEPTNO"), b.field("SAL"), b.field("COMM"));
+
+      // Combine the two projected queries
+      return b.combine(2).build();
+    };
+
+    relFn(relFn)
+        .withRule(CombineSharedComponentsRule.Config.DEFAULT.toRule())
         .check();
   }
 
-  @Test void testCombineCTEsWithUnion() {
-    final String sql = "WITH\n"
-        + "  high_sal AS (SELECT * FROM emp WHERE sal > 2000),\n"
-        + "  low_sal AS (SELECT * FROM emp WHERE sal <= 2000)\n"
-        + "SELECT * FROM high_sal\n"
-        + "UNION ALL\n"
-        + "SELECT * FROM low_sal";
+  @Test void testCombineAggregateQueries() {
+    // Two independent aggregate queries with different groupings and aggregations
+    final Function<RelBuilder, RelNode> relFn = b -> {
+      // Query 1: SELECT DEPTNO, COUNT(*) FROM EMP GROUP BY DEPTNO
+      b.scan("EMP")
+          .aggregate(b.groupKey("DEPTNO"),
+                    b.count(false, "CNT"));
 
-    sql(sql)
-        .withVolcanoPlanner(false, p -> {
-          p.addRule(CombineMultipleSpoolRule.Config.DEFAULT.toRule());
-        })
+      // Query 2: SELECT JOB, AVG(SAL), MAX(SAL) FROM EMP GROUP BY JOB
+      b.scan("EMP")
+          .aggregate(b.groupKey("JOB"),
+                    b.avg(false, "AVG_SAL", b.field("SAL")),
+                    b.max("MAX_SAL", b.field("SAL")));
+
+      // Combine the two aggregate queries
+      return b.combine(2).build();
+    };
+
+    relFn(relFn)
+        .withRule(CombineSharedComponentsRule.Config.DEFAULT.toRule())
         .check();
   }
 
-  @Test void testNoCombineForSingleCTE() {
-    final String sql = "WITH\n"
-        + "  dept_summary AS (SELECT deptno, COUNT(*) as cnt FROM emp GROUP BY deptno)\n"
-        + "SELECT * FROM dept_summary WHERE cnt > 5";
+  @Test void testCombineThreeIndependentQueries() {
+    // Three independent queries with different characteristics
+    final Function<RelBuilder, RelNode> relFn = b -> {
+      // Query 1: Simple scan
+      b.scan("EMP");
 
-    sql(sql)
-        .withVolcanoPlanner(false, p -> {
-          p.addRule(CombineMultipleSpoolRule.Config.DEFAULT.toRule());
-        })
-        .checkUnchanged();
-  }
+      // Query 2: Filtered and projected
+      b.scan("EMP")
+          .filter(b.call(SqlStdOperatorTable.GREATER_THAN,
+                         b.field("SAL"),
+                         b.literal(2000)))
+          .project(b.field("EMPNO"), b.field("SAL"));
 
-  @Test void testCombineCTEsReusedMultipleTimes() {
-    final String sql = "WITH\n"
-        + "  dept_stats AS (SELECT deptno, COUNT(*) as cnt, AVG(sal) as avg_sal\n"
-        + "                 FROM emp GROUP BY deptno)\n"
-        + "SELECT d1.deptno, d1.cnt, d2.avg_sal\n"
-        + "FROM dept_stats d1\n"
-        + "JOIN dept_stats d2 ON d1.deptno = d2.deptno\n"
-        + "WHERE d1.cnt > 3";
+      // Query 3: Aggregation
+      b.scan("EMP")
+          .aggregate(b.groupKey("DEPTNO"),
+                    b.sum(false, "TOTAL_SAL", b.field("SAL")));
 
-    sql(sql)
-        .withVolcanoPlanner(false, p -> {
-          p.addRule(CombineMultipleSpoolRule.Config.DEFAULT.toRule());
-        })
+      // Combine all three queries
+      return b.combine(3).build();
+    };
+
+    relFn(relFn)
+        .withRule(CombineSharedComponentsRule.Config.DEFAULT.toRule())
         .check();
   }
 
-  @Test void testCombineComplexCTEHierarchy() {
-    final String sql = "WITH\n"
-        + "  base AS (SELECT * FROM emp WHERE deptno IS NOT NULL),\n"
-        + "  dept_summary AS (SELECT deptno, COUNT(*) as emp_count FROM base GROUP BY deptno),\n"
-        + "  high_earners AS (SELECT * FROM base WHERE sal > 3000),\n"
-        + "  final AS (SELECT d.deptno, d.emp_count, COUNT(h.empno) as high_earner_count\n"
-        + "            FROM dept_summary d\n"
-        + "            LEFT JOIN high_earners h ON d.deptno = h.deptno\n"
-        + "            GROUP BY d.deptno, d.emp_count)\n"
-        + "SELECT * FROM final";
+  @Test void testCombineDifferentTables() {
+    // Independent queries from different tables
+    final Function<RelBuilder, RelNode> relFn = b -> {
+      // Query 1: SELECT * FROM EMP WHERE SAL > 2500
+      b.scan("EMP")
+          .filter(b.call(SqlStdOperatorTable.GREATER_THAN,
+                         b.field("SAL"),
+                         b.literal(2500)));
 
-    sql(sql)
-        .withVolcanoPlanner(false, p -> {
-          p.addRule(CombineMultipleSpoolRule.Config.DEFAULT.toRule());
-        })
+      // Query 2: SELECT * FROM DEPT WHERE LOC = 'DALLAS'
+      b.scan("DEPT")
+          .filter(b.call(SqlStdOperatorTable.EQUALS,
+                         b.field("LOC"),
+                         b.literal("DALLAS")));
+
+      // Combine queries from different tables
+      return b.combine(2).build();
+    };
+
+    relFn(relFn)
+        .withRule(CombineSharedComponentsRule.Config.DEFAULT.toRule())
+        .check();
+  }
+
+  @Test void testCombineWithSort() {
+    // Independent queries with different sort orders
+    final Function<RelBuilder, RelNode> relFn = b -> {
+      // Query 1: SELECT * FROM EMP ORDER BY SAL DESC
+      b.scan("EMP")
+          .sort(b.desc(b.field("SAL")));
+
+      // Query 2: SELECT DEPTNO, COUNT(*) as CNT FROM EMP GROUP BY DEPTNO ORDER BY CNT
+      b.scan("EMP")
+          .aggregate(b.groupKey("DEPTNO"),
+                    b.count(false, "CNT"))
+          .sort(b.field("CNT"));
+
+      // Combine the sorted queries
+      return b.combine(2).build();
+    };
+
+    relFn(relFn)
+        .withRule(CombineSharedComponentsRule.Config.DEFAULT.toRule())
+        .check();
+  }
+
+  @Test void testSingleQueryNoCombine() {
+    // Single query should not need a Combine
+    final Function<RelBuilder, RelNode> relFn = b ->
+        b.scan("EMP")
+         .filter(b.call(SqlStdOperatorTable.GREATER_THAN,
+                        b.field("SAL"),
+                        b.literal(1000)))
+         .build();
+
+    relFn(relFn)
+        .withRule(CombineSharedComponentsRule.Config.DEFAULT.toRule())
+        .check();
+  }
+
+  @Test void testCombineAllOnStack() {
+    // Test using combine() without specifying count - combines all on stack
+    final Function<RelBuilder, RelNode> relFn = b -> {
+      // Push multiple queries onto stack
+      b.scan("EMP");
+      b.scan("DEPT");
+      b.scan("EMP").filter(b.call(SqlStdOperatorTable.IS_NOT_NULL, b.field("MGR")));
+
+      // Combine all queries on stack (3 in this case)
+      return b.combine().build();
+    };
+
+    relFn(relFn)
+        .withRule(CombineSharedComponentsRule.Config.DEFAULT.toRule())
+        .check();
+  }
+
+  @Test void testUnionToDistinctRuleWithRelBuilder() {
+    // Convert the SQL test "select * from dept union select * from dept" 
+    // to use RelBuilder with Volcano planner
+    final Function<RelBuilder, RelNode> relFn = b -> {
+      // First scan of DEPT
+      b.scan("DEPT");
+      
+      // Second scan of DEPT
+      b.scan("DEPT");
+      
+      // Create UNION (not UNION ALL)
+      return b.union(false).build();
+    };
+
+    // Test with Volcano planner
+    relFn(relFn)
+        .withVolcanoPlanner(false, p ->
+            p.addRule(CoreRules.UNION_TO_DISTINCT))
+        .check();
+  }
+
+  @Test void testUnionToDistinctRuleWithHepPlanner() {
+    // Same test but with HepPlanner for comparison
+    final Function<RelBuilder, RelNode> relFn = b -> {
+      // First scan of DEPT
+      b.scan("DEPT");
+      
+      // Second scan of DEPT  
+      b.scan("DEPT");
+      
+      // Create UNION (not UNION ALL)
+      return b.union(false).build();
+    };
+
+    // Test with HepPlanner (default)
+    relFn(relFn)
+        .withRule(CoreRules.UNION_TO_DISTINCT)
         .check();
   }
 }

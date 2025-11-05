@@ -16,11 +16,14 @@
  */
 package org.apache.calcite.rel.rules;
 
+import org.apache.calcite.plan.CommonRelSubExprRule;
 import org.apache.calcite.plan.RelOptRuleCall;
 import org.apache.calcite.plan.RelOptSchema;
 import org.apache.calcite.plan.RelOptTable;
+import org.apache.calcite.plan.RelOptUtil;
 import org.apache.calcite.plan.RelRule;
 import org.apache.calcite.plan.SpoolRelOptTable;
+import org.apache.calcite.rel.RelCommonExpressionBasicSuggester;
 import org.apache.calcite.rel.RelHomogeneousShuttle;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.RelShuttleImpl;
@@ -38,6 +41,7 @@ import org.checkerframework.checker.nullness.qual.Nullable;
 import org.immutables.value.Value;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -66,8 +70,11 @@ public class CombineSharedComponentsRule extends RelRule<CombineSharedComponents
     // Map to track shared components (using digest as key)
     Map<RelNode, List<RelNode>> producerToConsumerMap = new HashMap<>();
 
-    // Find shared components across all inputs
-    findSharedComponents(combine, producerToConsumerMap);
+    RelCommonExpressionBasicSuggester suggester = new RelCommonExpressionBasicSuggester();
+    Collection<RelNode> test = suggester.suggest(RelOptUtil.stripAll(combine), null);
+
+//    // Find shared components across all inputs
+//    findSharedComponents(combine, producerToConsumerMap);
 
     // Create spools for shared components and build a direct mapping
     // from each RelNode instance to its spool replacement

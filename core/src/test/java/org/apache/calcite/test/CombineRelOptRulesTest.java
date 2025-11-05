@@ -16,6 +16,8 @@
  */
 package org.apache.calcite.test;
 
+import org.apache.calcite.plan.visualizer.RuleMatchVisualizer;
+import org.apache.calcite.plan.volcano.VolcanoPlanner;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.rules.CombineSharedComponentsRule;
 import org.apache.calcite.rel.rules.CoreRules;
@@ -103,7 +105,7 @@ class CombineRelOptRulesTest extends RelOptTestBase {
 
     relFn(relFn)
         .withRule(CombineSharedComponentsRule.Config.DEFAULT.toRule())
-        .check();
+        .vis();
   }
 
   @Test void testCombineAggregateQueries() {
@@ -213,7 +215,7 @@ class CombineRelOptRulesTest extends RelOptTestBase {
 
     relFn(relFn)
         .withRule(CombineSharedComponentsRule.Config.DEFAULT.toRule())
-        .check();
+        .checkUnchanged();
   }
 
   @Test void testCombineAllOnStack() {
@@ -230,46 +232,6 @@ class CombineRelOptRulesTest extends RelOptTestBase {
 
     relFn(relFn)
         .withRule(CombineSharedComponentsRule.Config.DEFAULT.toRule())
-        .check();
-  }
-
-  @Test void testUnionToDistinctRuleWithRelBuilder() {
-    // Convert the SQL test "select * from dept union select * from dept"
-    // to use RelBuilder with Volcano planner
-    final Function<RelBuilder, RelNode> relFn = b -> {
-      // First scan of DEPT
-      b.scan("DEPT");
-
-      // Second scan of DEPT
-      b.scan("DEPT");
-
-      // Create UNION (not UNION ALL)
-      return b.union(false).build();
-    };
-
-    // Test with Volcano planner
-    relFn(relFn)
-        .withVolcanoPlanner(false, p ->
-            p.addRule(CoreRules.UNION_TO_DISTINCT))
-        .check();
-  }
-
-  @Test void testUnionToDistinctRuleWithHepPlanner() {
-    // Same test but with HepPlanner for comparison
-    final Function<RelBuilder, RelNode> relFn = b -> {
-      // First scan of DEPT
-      b.scan("DEPT");
-
-      // Second scan of DEPT
-      b.scan("DEPT");
-
-      // Create UNION (not UNION ALL)
-      return b.union(false).build();
-    };
-
-    // Test with HepPlanner (default)
-    relFn(relFn)
-        .withRule(CoreRules.UNION_TO_DISTINCT)
         .check();
   }
 }

@@ -100,7 +100,7 @@ public final class CommonRelSubExprRegisterRule extends CommonRelSubExprRule {
 
     Config PROJECT = ImmutableCommonRelSubExprRegisterRule.Config.builder()
         .withOperandSupplier(o -> o.operand(Project.class)
-//            .predicate(new InterestingRelNodePredicate())
+            .predicate(new InterestingRelNodePredicate())
             .anyInputs())
         .build();
 

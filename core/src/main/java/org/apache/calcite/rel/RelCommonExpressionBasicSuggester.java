@@ -41,9 +41,9 @@ public class RelCommonExpressionBasicSuggester implements RelCommonExpressionSug
     CommonRelExpressionRegistry localRegistry = new CommonRelExpressionRegistry();
     HepProgram ruleProgram = new HepProgramBuilder()
         .addRuleInstance(CommonRelSubExprRegisterRule.Config.COMBINE.toRule())
-//        .addRuleInstance(CommonRelSubExprRegisterRule.Config.JOIN.toRule())
-//        .addRuleInstance(CommonRelSubExprRegisterRule.Config.AGGREGATE.toRule())
-//        .addRuleInstance(CommonRelSubExprRegisterRule.Config.FILTER.toRule())
+        .addRuleInstance(CommonRelSubExprRegisterRule.Config.JOIN.toRule())
+        .addRuleInstance(CommonRelSubExprRegisterRule.Config.AGGREGATE.toRule())
+        .addRuleInstance(CommonRelSubExprRegisterRule.Config.FILTER.toRule())
         .addRuleInstance(CommonRelSubExprRegisterRule.Config.PROJECT.toRule())
         .addRuleInstance(CommonRelSubExprRegisterRule.Config.SCAN.toRule())
         .build();

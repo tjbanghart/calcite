@@ -16,35 +16,26 @@
  */
 package org.apache.calcite.rel.rules;
 
-import org.apache.calcite.plan.CommonRelSubExprRule;
 import org.apache.calcite.plan.RelOptRuleCall;
-import org.apache.calcite.plan.RelOptSchema;
-import org.apache.calcite.plan.RelOptTable;
 import org.apache.calcite.plan.RelOptUtil;
 import org.apache.calcite.plan.RelRule;
 import org.apache.calcite.plan.SpoolRelOptTable;
 import org.apache.calcite.rel.RelCommonExpressionBasicSuggester;
 import org.apache.calcite.rel.RelHomogeneousShuttle;
 import org.apache.calcite.rel.RelNode;
-import org.apache.calcite.rel.RelShuttleImpl;
-import org.apache.calcite.rel.RelVisitor;
 import org.apache.calcite.rel.core.Combine;
 import org.apache.calcite.rel.core.RelFactories;
 import org.apache.calcite.rel.core.Spool;
 import org.apache.calcite.rel.logical.LogicalTableScan;
 import org.apache.calcite.rel.logical.LogicalTableSpool;
-import org.apache.calcite.tools.RelBuilder;
 
 import com.google.common.collect.ImmutableList;
 
-import org.checkerframework.checker.nullness.qual.Nullable;
 import org.immutables.value.Value;
 
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -64,149 +55,77 @@ public class CombineSharedComponentsRule extends RelRule<CombineSharedComponents
   }
 
   @Override public void onMatch(RelOptRuleCall call) {
-    Combine combine = call.rel(0);
-    List<RelNode> inputs = combine.getInputs();
+    RelNode combine = RelOptUtil.stripAll(call.rel(0));
 
-    // Map to track shared components (using digest as key)
-    Map<RelNode, List<RelNode>> producerToConsumerMap = new HashMap<>();
-
+    // Use the suggester to find shared components
     RelCommonExpressionBasicSuggester suggester = new RelCommonExpressionBasicSuggester();
-    Collection<RelNode> test = suggester.suggest(RelOptUtil.stripAll(combine), null);
+    Collection<RelNode> sharedComponents = suggester.suggest(combine, null);
 
-//    // Find shared components across all inputs
-//    findSharedComponents(combine, producerToConsumerMap);
-
-    // Create spools for shared components and build a direct mapping
-    // from each RelNode instance to its spool replacement
-    Map<RelNode, LogicalTableSpool> nodeToSpoolMap = new HashMap<>();
-    int spoolCounter = 0;
-
-    for (Map.Entry<RelNode, List<RelNode>> entry : producerToConsumerMap.entrySet()) {
-      RelNode producer = entry.getKey();
-      List<RelNode> consumers = entry.getValue();
-
-      if (consumers.size() > 1) {
-        // This component is shared - create a spool for it
-
-        // Create the spool table for temporary storage
-        SpoolRelOptTable spoolTable = new SpoolRelOptTable(
-            null,  // no schema needed for temporary tables
-            producer.getRowType(),
-            "spool_" + spoolCounter++
-        );
-
-        // Create the TableSpool that will produce/write to this table
-        LogicalTableSpool spool =
-            (LogicalTableSpool) RelFactories.DEFAULT_SPOOL_FACTORY.createTableSpool(
-                producer,
-                Spool.Type.LAZY,   // Read type
-                Spool.Type.EAGER,  // Write type
-                spoolTable
-            );
-
-        // Map the first consumer to the spool itself (producer)
-        // and all others to the spool (they'll become consumers)
-        nodeToSpoolMap.put(consumers.get(0), spool);
-        for (int i = 1; i < consumers.size(); i++) {
-          nodeToSpoolMap.put(consumers.get(i), spool);
-        }
-      }
-    }
-
-    // If no spools were created, nothing to do
-    if (nodeToSpoolMap.isEmpty()) {
+    // If no shared components found, nothing to do
+    if (sharedComponents.isEmpty()) {
       return;
     }
 
-    // Replace shared components in each input of the Combine using a shuttle
-    List<RelNode> newInputs = new ArrayList<>();
-    SpoolReplacementShuttle shuttle = new SpoolReplacementShuttle(nodeToSpoolMap);
+    // Map to track which shared component gets which spool
+    Map<RelNode, LogicalTableSpool> digestToSpool = new HashMap<>();
+    // For each shared component, create a spool
+    for (RelNode sharedComponent : sharedComponents) {
+      // Create the spool table for temporary storage
+      SpoolRelOptTable spoolTable = new SpoolRelOptTable(
+          null,  // no schema needed for temporary tables
+          sharedComponent.getRowType(),
+          "spool_" + sharedComponent.getId()
+      );
 
-    for (RelNode input : inputs) {
-      // Apply the shuttle to replace shared components
-      RelNode newInput = input.accept(shuttle);
-      newInputs.add(newInput);
+      // Create the TableSpool that will produce/write to this table
+      LogicalTableSpool spool =
+          (LogicalTableSpool) RelFactories.DEFAULT_SPOOL_FACTORY.createTableSpool(
+              sharedComponent,
+              Spool.Type.LAZY,  // Read type
+              Spool.Type.LAZY,  // Write type
+              spoolTable
+          );
+
+      digestToSpool.put(sharedComponent, spool);
     }
 
-    // Create the new Combine with the transformed inputs
-    RelBuilder relBuilder = this.relBuilderFactory.create(
-        combine.getCluster(),
-        combine.getCluster().getPlanner().getContext().unwrap(RelOptSchema.class)
+    combine = combine.accept(
+        getReplacer(digestToSpool)
     );
 
-    // Push all new inputs onto the builder
-    for (RelNode newInput : newInputs) {
-      relBuilder.push(newInput);
-    }
-
-    // Create the new Combine
-    RelNode newCombine = relBuilder.combine(newInputs.size()).build();
-
     // Transform to the new plan
-    call.transformTo(newCombine);
+    call.transformTo(combine);
   }
 
-  /**
-   * Shuttle that replaces shared components with spools or table scans.
-   */
-  private static class SpoolReplacementShuttle extends RelShuttleImpl {
-    private final Map<RelNode, LogicalTableSpool> nodeToSpoolMap;
-    private final Set<LogicalTableSpool> usedSpools = new HashSet<>();
+  private static RelHomogeneousShuttle getReplacer(Map<RelNode, LogicalTableSpool> digestToSpool) {
+    Set<RelNode> producers = new HashSet<>();
 
-    SpoolReplacementShuttle(Map<RelNode, LogicalTableSpool> nodeToSpoolMap) {
-      this.nodeToSpoolMap = nodeToSpoolMap;
-    }
+    return new RelHomogeneousShuttle() {
+      @Override
+      public RelNode visit(RelNode node) {
+        // Check if this node matches any of our shared components
+        if (digestToSpool.containsKey(node)) {
+          LogicalTableSpool spool = digestToSpool.get(node);
 
-    @Override public RelNode visit(RelNode other) {
-      // Check if this node should be replaced with a spool
-      if (nodeToSpoolMap.containsKey(other)) {
-        LogicalTableSpool spool = nodeToSpoolMap.get(other);
-
-        // Check if this spool has been used already
-        if (!usedSpools.contains(spool)) {
-          // First use: return the spool itself (which writes to the table)
-          usedSpools.add(spool);
-          return spool;
-        } else {
-          // Subsequent uses: create a table scan that reads from the spool table
-          RelOptTable spoolTable = spool.getTable();
-          return LogicalTableScan.create(other.getCluster(), spoolTable, ImmutableList.of());
+          if (producers.contains(node)) {
+            // Subsequent occurrence - replace with table scan (consumer)
+            return LogicalTableScan.create(
+                node.getCluster(),
+                spool.getTable(),
+                ImmutableList.of()
+            );
+          } else {
+            // First occurrence - replace with the spool (producer)
+            producers.add(node);
+            return spool;
+          }
         }
+        // Continue visiting children
+        return super.visit(node);
       }
-
-      // Otherwise, continue with default visiting behavior
-      return super.visit(other.stripped());
-    }
+    };
   }
 
-  private void findSharedComponents(Combine combine, Map<RelNode, List<RelNode>> sharedComponentMap) {
-    // Use digest to identify structurally identical nodes
-    Map<String, List<RelNode>> digestToNodes = new HashMap<>();
-
-    // Visit all nodes in all inputs
-    for (RelNode input : combine.getInputs()) {
-      input.accept(new RelHomogeneousShuttle() {
-        @Override public RelNode visit(RelNode node) {
-          // Strip to get the real node for comparison (handles HepRelVertex)
-          RelNode stripped = node.stripped();
-          String digest = stripped.getDigest();
-
-          digestToNodes.computeIfAbsent(digest, k -> new ArrayList<>()).add(node);
-
-          // Continue visiting children
-          return super.visit(stripped);
-        }
-      });
-    }
-
-    // Now identify shared components (those with multiple occurrences)
-    for (List<RelNode> nodes : digestToNodes.values()) {
-      if (nodes.size() > 1) {
-        RelNode first = nodes.get(0);
-        sharedComponentMap.put(first, nodes);
-      }
-    }
-  }
 
   /** Rule configuration. */
   @Value.Immutable(singleton = true)

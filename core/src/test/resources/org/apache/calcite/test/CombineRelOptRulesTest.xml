@@ -114,27 +114,20 @@ Combine
     <Resource name="planAfter">
       <![CDATA[
 Combine
-  LogicalTableScan(table=[[scott, EMP]])
+  LogicalTableSpool(readType=[LAZY], writeType=[LAZY], table=[[TEMP, spool_0]])
+    LogicalTableScan(table=[[scott, EMP]])
   LogicalProject(EMPNO=[$0], SAL=[$5])
     LogicalFilter(condition=[>($5, 2000)])
-      LogicalTableScan(table=[[scott, EMP]])
+      LogicalTableSpool(readType=[LAZY], writeType=[LAZY], table=[[TEMP, spool_33]])
+        LogicalTableScan(table=[[TEMP, spool_0]])
   LogicalAggregate(group=[{7}], TOTAL_SAL=[SUM($5)])
-    LogicalTableScan(table=[[scott, EMP]])
+    LogicalTableScan(table=[[TEMP, spool_33]])
 ]]>
     </Resource>
   </TestCase>
 
   <TestCase name="testCombineDifferentTables">
     <Resource name="planBefore">
-      <![CDATA[
-Combine
-  LogicalFilter(condition=[>($5, 2500)])
-    LogicalTableScan(table=[[scott, EMP]])
-  LogicalFilter(condition=[=($2, 'DALLAS')])
-    LogicalTableScan(table=[[scott, DEPT]])
-]]>
-    </Resource>
-    <Resource name="planAfter">
       <![CDATA[
 Combine
   LogicalFilter(condition=[>($5, 2500)])
@@ -160,22 +153,17 @@ Combine
       <![CDATA[
 Combine
   LogicalSort(sort0=[$5], dir0=[DESC])
-    LogicalTableScan(table=[[scott, EMP]])
+    LogicalTableSpool(readType=[LAZY], writeType=[EAGER], table=[[TEMP, spool_0]])
+      LogicalTableScan(table=[[scott, EMP]])
   LogicalSort(sort0=[$1], dir0=[ASC])
     LogicalAggregate(group=[{7}], CNT=[COUNT()])
-      LogicalTableScan(table=[[scott, EMP]])
+      LogicalTableScan(table=[[TEMP, spool_0]])
 ]]>
     </Resource>
   </TestCase>
 
   <TestCase name="testSingleQueryNoCombine">
     <Resource name="planBefore">
-      <![CDATA[
-LogicalFilter(condition=[>($5, 1000)])
-  LogicalTableScan(table=[[scott, EMP]])
-]]>
-    </Resource>
-    <Resource name="planAfter">
       <![CDATA[
 LogicalFilter(condition=[>($5, 1000)])
   LogicalTableScan(table=[[scott, EMP]])
@@ -196,10 +184,11 @@ Combine
     <Resource name="planAfter">
       <![CDATA[
 Combine
-  LogicalTableScan(table=[[scott, EMP]])
+  LogicalTableSpool(readType=[LAZY], writeType=[EAGER], table=[[TEMP, spool_0]])
+    LogicalTableScan(table=[[scott, EMP]])
   LogicalTableScan(table=[[scott, DEPT]])
   LogicalFilter(condition=[IS NOT NULL($3)])
-    LogicalTableScan(table=[[scott, EMP]])
+    LogicalTableScan(table=[[TEMP, spool_0]])
 ]]>
     </Resource>
   </TestCase>

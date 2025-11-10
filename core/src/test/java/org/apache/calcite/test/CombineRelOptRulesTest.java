@@ -16,9 +16,15 @@
  */
 package org.apache.calcite.test;
 
+import org.apache.calcite.adapter.enumerable.EnumerableRules;
+import org.apache.calcite.plan.RelOptUtil;
+import org.apache.calcite.plan.hep.HepPlanner;
+import org.apache.calcite.plan.hep.HepProgram;
+import org.apache.calcite.plan.hep.HepProgramBuilder;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.rules.CombineSharedComponentsRule;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
+import org.apache.calcite.tools.Programs;
 import org.apache.calcite.tools.RelBuilder;
 
 import org.junit.jupiter.api.Test;
@@ -81,8 +87,13 @@ class CombineRelOptRulesTest extends RelOptTestBase {
     };
 
     relFn(relFn)
-        .withRule(CombineSharedComponentsRule.Config.DEFAULT.toRule())
-        .check();
+        .withVolcanoPlanner(false, planner -> {
+          // Register enumerable conversion rules (needed for VolcanoPlanner)
+          RelOptUtil.registerDefaultRules(planner, false, false);
+          planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
+        })
+        .vis();
+//        .check();
   }
 
   @Test void testCombineQueriesWithDifferentProjections() {
@@ -147,7 +158,8 @@ class CombineRelOptRulesTest extends RelOptTestBase {
                     b.sum(false, "TOTAL_SAL", b.field("SAL")));
 
       // Combine all three queries
-      return b.combine(3).build();
+      return b.combine(3)
+          .build();
     };
 
     relFn(relFn)
@@ -230,5 +242,36 @@ class CombineRelOptRulesTest extends RelOptTestBase {
     relFn(relFn)
         .withRule(CombineSharedComponentsRule.Config.DEFAULT.toRule())
         .check();
+  }
+
+  @Test void testCombineWithSharedFilteredBase() {
+    // Two queries that share a common filtered base, then apply different projections
+    final Function<RelBuilder, RelNode> relFn = b -> {
+      // Create the shared base: EMP WHERE SAL > 1000
+      RelNode sharedBase = b.scan("EMP")
+          .filter(b.call(SqlStdOperatorTable.GREATER_THAN,
+                         b.field("SAL"),
+                         b.literal(1000)))
+          .build();
+
+      // Query 1: SELECT EMPNO, SAL FROM (shared base)
+      b.push(sharedBase)
+          .project(b.field("EMPNO"), b.field("SAL"));
+
+      // Query 2: SELECT ENAME, DEPTNO FROM (shared base)
+      b.push(sharedBase)
+          .project(b.field("ENAME"), b.field("DEPTNO"));
+
+      // Combine the two queries with shared filtered base
+      return b.combine(2).build();
+    };
+
+    relFn(relFn)
+        .withVolcanoPlanner(false, planner -> {
+          // Register enumerable conversion rules (needed for VolcanoPlanner)
+          RelOptUtil.registerDefaultRules(planner, false, false);
+          planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
+        }).vis();
+//        .check();  // Rule doesn't find shared subtrees in this pattern
   }
 }

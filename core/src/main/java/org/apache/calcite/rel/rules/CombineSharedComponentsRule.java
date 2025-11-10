@@ -68,13 +68,15 @@ public class CombineSharedComponentsRule extends RelRule<CombineSharedComponents
 
     // Map to track which shared component gets which spool
     Map<RelNode, LogicalTableSpool> digestToSpool = new HashMap<>();
+    int spoolCounter = 0;
+    
     // For each shared component, create a spool
     for (RelNode sharedComponent : sharedComponents) {
       // Create the spool table for temporary storage
       SpoolRelOptTable spoolTable = new SpoolRelOptTable(
           null,  // no schema needed for temporary tables
           sharedComponent.getRowType(),
-          "spool_" + sharedComponent.getId()
+          "spool_" + spoolCounter++
       );
 
       // Create the TableSpool that will produce/write to this table
@@ -82,7 +84,7 @@ public class CombineSharedComponentsRule extends RelRule<CombineSharedComponents
           (LogicalTableSpool) RelFactories.DEFAULT_SPOOL_FACTORY.createTableSpool(
               sharedComponent,
               Spool.Type.LAZY,  // Read type
-              Spool.Type.LAZY,  // Write type
+              Spool.Type.EAGER,  // Write type
               spoolTable
           );
 
@@ -139,7 +141,22 @@ public class CombineSharedComponentsRule extends RelRule<CombineSharedComponents
     }
 
     default Config withOperandFor(Class<? extends Combine> combineClass) {
-      return withOperandSupplier(b -> b.operand(combineClass).anyInputs())
+      return withOperandSupplier(b -> b.operand(combineClass)
+          .predicate(combine -> {
+            // Don't fire if any immediate child is a Spool
+            for (RelNode input : combine.getInputs()) {
+              if (input instanceof Spool || input instanceof LogicalTableSpool) {
+                return false;
+              }
+              // Check if stripped node is a Spool (in case of HepRelVertex wrapper)
+              RelNode stripped = input.stripped();
+              if (stripped instanceof Spool || stripped instanceof LogicalTableSpool) {
+                return false;
+              }
+            }
+            return true;
+          })
+          .anyInputs())
           .as(Config.class);
     }
   }

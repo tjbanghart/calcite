@@ -118,8 +118,9 @@ public class SpoolRelOptTable implements RelOptTable {
 
   @Override
   public @Nullable Expression getExpression(Class clazz) {
-    // Not needed for planning
-    throw new UnsupportedOperationException("SpoolRelOptTable.getExpression should not be called");
+    // Return null so EnumerableTableScanRule won't try to convert spool table scans
+    // Spool table scans are handled within the spool operator itself
+    return null;
   }
 
   @Override

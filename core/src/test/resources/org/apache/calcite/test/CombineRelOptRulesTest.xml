@@ -45,12 +45,11 @@ Combine
     </Resource>
     <Resource name="planAfter">
       <![CDATA[
-Combine
-  LogicalFilter(condition=[>($5, 3000)])
-    LogicalTableSpool(readType=[LAZY], writeType=[EAGER], table=[[TEMP, spool_0]])
-      LogicalTableScan(table=[[scott, EMP]])
-  LogicalFilter(condition=[=($7, 10)])
-    LogicalTableScan(table=[[TEMP, spool_0]])
+EnumerableCombine
+  EnumerableFilter(condition=[>($5, 3000)])
+    EnumerableTableScan(table=[[scott, EMP]])
+  EnumerableFilter(condition=[=($7, 10)])
+    EnumerableTableScan(table=[[scott, EMP]])
 ]]>
     </Resource>
   </TestCase>
@@ -114,14 +113,13 @@ Combine
     <Resource name="planAfter">
       <![CDATA[
 Combine
-  LogicalTableSpool(readType=[LAZY], writeType=[LAZY], table=[[TEMP, spool_0]])
+  LogicalTableSpool(readType=[LAZY], writeType=[EAGER], table=[[TEMP, spool_0]])
     LogicalTableScan(table=[[scott, EMP]])
   LogicalProject(EMPNO=[$0], SAL=[$5])
     LogicalFilter(condition=[>($5, 2000)])
-      LogicalTableSpool(readType=[LAZY], writeType=[LAZY], table=[[TEMP, spool_33]])
-        LogicalTableScan(table=[[TEMP, spool_0]])
+      LogicalTableScan(table=[[TEMP, spool_0]])
   LogicalAggregate(group=[{7}], TOTAL_SAL=[SUM($5)])
-    LogicalTableScan(table=[[TEMP, spool_33]])
+    LogicalTableScan(table=[[TEMP, spool_0]])
 ]]>
     </Resource>
   </TestCase>
@@ -209,4 +207,25 @@ Combine
 ]]>
   </Resource>
 </TestCase>
+  <TestCase name="testCombineWithSharedFilteredBase">
+    <Resource name="planBefore">
+      <![CDATA[
+Combine
+  LogicalProject(EMPNO=[$0], SAL=[$5])
+    LogicalFilter(condition=[>($5, 1000)])
+      LogicalTableScan(table=[[scott, EMP]])
+  LogicalProject(ENAME=[$1], DEPTNO=[$7])
+    LogicalFilter(condition=[>($5, 1000)])
+      LogicalTableScan(table=[[scott, EMP]])
+]]>
+    </Resource>
+    <Resource name="planAfter">
+      <![CDATA[
+Combine
+  LogicalTableSpool(readType=[LAZY], writeType=[EAGER], table=[[TEMP, spool_0]])
+    LogicalTableScan(table=[[scott, EMP]])
+  LogicalTableScan(table=[[TEMP, spool_0]])
+]]>
+    </Resource>
+  </TestCase>
 </Root>

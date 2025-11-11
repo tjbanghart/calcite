@@ -22,6 +22,7 @@ import org.apache.calcite.plan.RelOptPlanner;
 import org.apache.calcite.plan.RelOptSchema;
 import org.apache.calcite.plan.RelOptTable;
 import org.apache.calcite.plan.RelTraitSet;
+import org.apache.calcite.plan.SpoolRelOptTable;
 import org.apache.calcite.rel.AbstractRelNode;
 import org.apache.calcite.rel.RelInput;
 import org.apache.calcite.rel.RelNode;
@@ -104,8 +105,21 @@ public abstract class TableScan
   @Override public @Nullable RelOptCost computeSelfCost(RelOptPlanner planner,
       RelMetadataQuery mq) {
     double dRows = mq.getRowCount(this);
-    double dCpu = dRows + 1; // ensure non-zero cost
-    double dIo = 0;
+    double dCpu;
+    double dIo;
+
+    // Reading from a spool is much cheaper than scanning a base table
+    // The data is already materialized in temporary storage
+    if (table instanceof SpoolRelOptTable) {
+      // Spool read: minimal cost, just reading from temp storage
+      dCpu = dRows * 0.1;  // 10x cheaper than base table scan
+      dIo = dRows * 0.2;   // Sequential read from temp storage
+    } else {
+      // Base table scan: standard cost
+      dCpu = dRows + 1;    // ensure non-zero cost
+      dIo = 0;
+    }
+
     return planner.getCostFactory().makeCost(dRows, dCpu, dIo);
   }
 

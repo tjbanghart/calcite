@@ -20,6 +20,7 @@ import org.apache.calcite.plan.RelOptRuleCall;
 import org.apache.calcite.plan.RelOptUtil;
 import org.apache.calcite.plan.RelRule;
 import org.apache.calcite.plan.SpoolRelOptTable;
+import org.apache.calcite.rel.metadata.RelMetadataQuery;
 import org.apache.calcite.rel.RelCommonExpressionBasicSuggester;
 import org.apache.calcite.rel.RelHomogeneousShuttle;
 import org.apache.calcite.rel.RelNode;
@@ -66,17 +67,26 @@ public class CombineSharedComponentsRule extends RelRule<CombineSharedComponents
       return;
     }
 
-    // Map to track which shared component gets which spool
-    Map<RelNode, LogicalTableSpool> digestToSpool = new HashMap<>();
+    // Map to track which shared component digest gets which spool
+    Map<String, LogicalTableSpool> digestToSpool = new HashMap<>();
     int spoolCounter = 0;
-    
+
+    // Get metadata query for row count estimation
+    final RelMetadataQuery mq = call.getMetadataQuery();
+
     // For each shared component, create a spool
     for (RelNode sharedComponent : sharedComponents) {
-      // Create the spool table for temporary storage
+      // Get the actual row count of the shared component being materialized
+      // This is critical for accurate cost estimation in downstream operations
+      Double inputRowCount = mq.getRowCount(sharedComponent);
+      double actualRowCount = inputRowCount != null ? inputRowCount : 100.0;
+
+      // Create the spool table for temporary storage with actual row count
       SpoolRelOptTable spoolTable = new SpoolRelOptTable(
           null,  // no schema needed for temporary tables
           sharedComponent.getRowType(),
-          "spool_" + spoolCounter++
+          "spool_" + spoolCounter++,
+          actualRowCount  // Pass the actual row count for accurate cardinality
       );
 
       // Create the TableSpool that will produce/write to this table
@@ -88,7 +98,8 @@ public class CombineSharedComponentsRule extends RelRule<CombineSharedComponents
               spoolTable
           );
 
-      digestToSpool.put(sharedComponent, spool);
+      // Use digest (structural signature) instead of object identity
+      digestToSpool.put(sharedComponent.getDigest(), spool);
     }
 
     combine = combine.accept(
@@ -99,17 +110,18 @@ public class CombineSharedComponentsRule extends RelRule<CombineSharedComponents
     call.transformTo(combine);
   }
 
-  private static RelHomogeneousShuttle getReplacer(Map<RelNode, LogicalTableSpool> digestToSpool) {
-    Set<RelNode> producers = new HashSet<>();
+  private static RelHomogeneousShuttle getReplacer(Map<String, LogicalTableSpool> digestToSpool) {
+    Set<String> producers = new HashSet<>();
 
     return new RelHomogeneousShuttle() {
       @Override
       public RelNode visit(RelNode node) {
-        // Check if this node matches any of our shared components
-        if (digestToSpool.containsKey(node)) {
-          LogicalTableSpool spool = digestToSpool.get(node);
+        // Check if this node's digest matches any of our shared components
+        String nodeDigest = node.getDigest();
+        if (digestToSpool.containsKey(nodeDigest)) {
+          LogicalTableSpool spool = digestToSpool.get(nodeDigest);
 
-          if (producers.contains(node)) {
+          if (producers.contains(nodeDigest)) {
             // Subsequent occurrence - replace with table scan (consumer)
             return LogicalTableScan.create(
                 node.getCluster(),
@@ -118,7 +130,7 @@ public class CombineSharedComponentsRule extends RelRule<CombineSharedComponents
             );
           } else {
             // First occurrence - replace with the spool (producer)
-            producers.add(node);
+            producers.add(nodeDigest);
             return spool;
           }
         }
@@ -145,12 +157,12 @@ public class CombineSharedComponentsRule extends RelRule<CombineSharedComponents
           .predicate(combine -> {
             // Don't fire if any immediate child is a Spool
             for (RelNode input : combine.getInputs()) {
-              if (input instanceof Spool || input instanceof LogicalTableSpool) {
+              if (input instanceof Spool) {
                 return false;
               }
               // Check if stripped node is a Spool (in case of HepRelVertex wrapper)
               RelNode stripped = input.stripped();
-              if (stripped instanceof Spool || stripped instanceof LogicalTableSpool) {
+              if (stripped instanceof Spool) {
                 return false;
               }
             }

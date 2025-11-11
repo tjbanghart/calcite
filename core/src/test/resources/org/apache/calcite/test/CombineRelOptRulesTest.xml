@@ -112,14 +112,13 @@ Combine
     </Resource>
     <Resource name="planAfter">
       <![CDATA[
-Combine
-  LogicalTableSpool(readType=[LAZY], writeType=[EAGER], table=[[TEMP, spool_0]])
-    LogicalTableScan(table=[[scott, EMP]])
-  LogicalProject(EMPNO=[$0], SAL=[$5])
-    LogicalFilter(condition=[>($5, 2000)])
-      LogicalTableScan(table=[[TEMP, spool_0]])
-  LogicalAggregate(group=[{7}], TOTAL_SAL=[SUM($5)])
-    LogicalTableScan(table=[[TEMP, spool_0]])
+EnumerableCombine
+  EnumerableTableScan(table=[[scott, EMP]])
+  EnumerableProject(EMPNO=[$0], SAL=[$5])
+    EnumerableFilter(condition=[>($5, 2000)])
+      EnumerableTableScan(table=[[scott, EMP]])
+  EnumerableAggregate(group=[{7}], TOTAL_SAL=[SUM($5)])
+    EnumerableTableScan(table=[[scott, EMP]])
 ]]>
     </Resource>
   </TestCase>
@@ -221,10 +220,14 @@ Combine
     </Resource>
     <Resource name="planAfter">
       <![CDATA[
-Combine
-  LogicalTableSpool(readType=[LAZY], writeType=[EAGER], table=[[TEMP, spool_0]])
-    LogicalTableScan(table=[[scott, EMP]])
-  LogicalTableScan(table=[[TEMP, spool_0]])
+EnumerableCombine
+  EnumerableProject(EMPNO=[$0], SAL=[$5])
+    EnumerableTableSpool(readType=[LAZY], writeType=[EAGER], table=[[TEMP, spool_0]])
+      EnumerableFilter(condition=[>($5, 1000)])
+        EnumerableTableScan(table=[[scott, EMP]])
+  EnumerableProject(ENAME=[$1], DEPTNO=[$7])
+    EnumerableInterpreter
+      BindableTableScan(table=[[TEMP, spool_0]])
 ]]>
     </Resource>
   </TestCase>

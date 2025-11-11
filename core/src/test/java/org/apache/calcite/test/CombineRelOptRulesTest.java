@@ -163,8 +163,12 @@ class CombineRelOptRulesTest extends RelOptTestBase {
     };
 
     relFn(relFn)
-        .withRule(CombineSharedComponentsRule.Config.DEFAULT.toRule()).vis();
-//        .check();
+        .withVolcanoPlanner(false, planner -> {
+          // Register enumerable conversion rules (needed for VolcanoPlanner)
+          RelOptUtil.registerDefaultRules(planner, false, false);
+          planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
+        })
+        .vis();
   }
 
   @Test void testCombineDifferentTables() {

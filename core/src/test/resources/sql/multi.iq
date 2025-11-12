@@ -15,8 +15,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-!use scott-volcano
-!set outputformat mysql
+!use scott
+!set outputformat csv
 
 # Skip all HepPlanner preprocessing (including calc conversion)
 # and go directly to VolcanoPlanner for optimization
@@ -30,16 +30,17 @@ MULTI(
     (SELECT EMPNO, SAL FROM (SELECT * FROM EMP WHERE SAL > 1000)),
     (SELECT ENAME, DEPTNO FROM (SELECT * FROM EMP WHERE SAL > 1000))
 );
-EnumerableCombine
-  EnumerableProject(EMPNO=[$0], SAL=[$5])
-    EnumerableFilter(condition=[>(CAST($5):DECIMAL(12, 2), 1000.00)])
-      EnumerableTableSpool(readType=[LAZY], writeType=[EAGER], table=[[TEMP, spool_0]])
-        EnumerableTableScan(table=[[scott, EMP]])
-  EnumerableProject(ENAME=[$1], DEPTNO=[$7])
-    EnumerableFilter(condition=[>(CAST($5):DECIMAL(12, 2), 1000.00)])
-      EnumerableInterpreter
-        BindableTableScan(table=[[TEMP, spool_0]])
 !plan
 !ok
+
+MULTI(
+    (SELECT EMPNO, SAL FROM (SELECT * FROM EMP WHERE SAL > 100)),
+    (SELECT ENAME, DEPTNO FROM (SELECT * FROM EMP WHERE SAL > 100)),
+    (SELECT JOB, MGR FROM (SELECT * FROM EMP WHERE SAL < 10)),
+    (SELECT HIREDATE, COMM FROM (SELECT * FROM EMP WHERE SAL < 10))
+);
+#!plan
+#!ok
+
 
 # End multi.iq

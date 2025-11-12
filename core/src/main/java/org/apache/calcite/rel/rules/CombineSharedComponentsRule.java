@@ -62,6 +62,26 @@ public class CombineSharedComponentsRule extends RelRule<CombineSharedComponents
     RelCommonExpressionBasicSuggester suggester = new RelCommonExpressionBasicSuggester();
     Collection<RelNode> sharedComponents = suggester.suggest(combine, null);
 
+    // Filter out any components that are already spools or scans from spool tables
+    // to avoid creating spools of spools (which causes infinite loops)
+    sharedComponents = sharedComponents.stream()
+        .filter(node -> {
+          // Skip if the node itself is a Spool
+          if (node instanceof Spool) {
+            return false;
+          }
+          // Skip if it's a TableScan reading from a spool table
+          if (node instanceof LogicalTableScan) {
+            LogicalTableScan scan = (LogicalTableScan) node;
+            // Check if the underlying table is a SpoolRelOptTable
+            if (scan.getTable() instanceof SpoolRelOptTable) {
+              return false;
+            }
+          }
+          return true;
+        })
+        .collect(java.util.stream.Collectors.toList());
+
     // If no shared components found, nothing to do
     if (sharedComponents.isEmpty()) {
       return;

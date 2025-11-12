@@ -37,8 +37,7 @@
     <logger name="org.apache.calcite.avatica" level="ERROR"/>
     <logger name="org.eclipse.jetty" level="ERROR"/>
     <logger name="org.apache.calcite.sql.parser" level="ERROR"/>
-    <logger name="log4j.logger.org.apache.calcite.plan.hep.HepPlanner" level="TRACE"/>
-    <logger name="org.apache.calcite.plan.RelOptPlanner" level="TRACE">
+    <logger name="org.apache.calcite.plan.RelOptPlanner" level="INFO"> // TJ: Logs
       <MarkerFilter marker="FULL_PLAN" onMatch="DENY" onMismatch="NEUTRAL"/>
     </logger>
     <logger name="org.apache.calcite.rel.rules.DpHyp" level="ERROR"/>

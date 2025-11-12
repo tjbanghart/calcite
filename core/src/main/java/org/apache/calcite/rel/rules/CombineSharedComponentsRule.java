@@ -94,7 +94,7 @@ public class CombineSharedComponentsRule extends RelRule<CombineSharedComponents
           (LogicalTableSpool) RelFactories.DEFAULT_SPOOL_FACTORY.createTableSpool(
               sharedComponent,
               Spool.Type.LAZY,  // Read type
-              Spool.Type.EAGER,  // Write type
+              Spool.Type.LAZY,  // Write type
               spoolTable
           );
 

@@ -456,8 +456,8 @@ public class CalcitePrepareImpl implements CalcitePrepare {
     }
     planner.setTopDownOpt(prepareContext.config().topDownOpt());
     RelOptUtil.registerDefaultRules(planner,
-        prepareContext.config().materializationsEnabled(),
-        enableBindable);
+        false,
+        false);
 
     final CalcitePrepare.SparkHandler spark = prepareContext.spark();
     if (spark.enabled()) {

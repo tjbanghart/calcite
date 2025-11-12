@@ -17,18 +17,21 @@
 package org.apache.calcite.test;
 
 import org.apache.calcite.adapter.enumerable.EnumerableRules;
+import org.apache.calcite.plan.RelOptPlanner;
 import org.apache.calcite.plan.RelOptUtil;
 import org.apache.calcite.plan.hep.HepPlanner;
 import org.apache.calcite.plan.hep.HepProgram;
 import org.apache.calcite.plan.hep.HepProgramBuilder;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.rules.CombineSharedComponentsRule;
+import org.apache.calcite.runtime.Hook;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.tools.Programs;
 import org.apache.calcite.tools.RelBuilder;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
@@ -275,6 +278,23 @@ class CombineRelOptRulesTest extends RelOptTestBase {
           // Register enumerable conversion rules (needed for VolcanoPlanner)
           RelOptUtil.registerDefaultRules(planner, false, false);
           planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
+        }).vis();
+//        .check();  // Rule doesn't find shared subtrees in this pattern
+  }
+
+  @Test void testCombineWithSharedFilteredBaseSQL() {
+    // Two queries that share a common filtered base, then apply different projections
+    String sql = "MULTI("
+        + "(SELECT EMPNO, SAL FROM (SELECT * FROM EMP WHERE SAL > 1000)), "
+        + "(SELECT ENAME, DEPTNO FROM (SELECT * FROM EMP WHERE SAL > 1000))"
+    + ")";
+
+    sql(sql)
+        .withVolcanoPlanner(false, planner -> {
+          // Register enumerable conversion rules (needed for VolcanoPlanner)
+          RelOptUtil.registerDefaultRules(planner, false, false);
+          planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
+          System.out.println(planner);
         }).vis();
 //        .check();  // Rule doesn't find shared subtrees in this pattern
   }

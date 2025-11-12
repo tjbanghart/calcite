@@ -56,6 +56,7 @@ import org.apache.calcite.sql.SqlTumbleTableFunction;
 import org.apache.calcite.sql.SqlUnnestOperator;
 import org.apache.calcite.sql.SqlUtil;
 import org.apache.calcite.sql.SqlValuesOperator;
+import org.apache.calcite.sql.SqlMultiOperator;
 import org.apache.calcite.sql.SqlWindow;
 import org.apache.calcite.sql.SqlWithinDistinctOperator;
 import org.apache.calcite.sql.SqlWithinGroupOperator;
@@ -1599,6 +1600,9 @@ public class SqlStdOperatorTable extends ReflectiveSqlOperatorTable {
 
   public static final SqlSpecialOperator VALUES =
       new SqlValuesOperator();
+
+  public static final SqlSpecialOperator MULTI =
+      new SqlMultiOperator();
 
   public static final SqlLiteralChainOperator LITERAL_CHAIN =
       new SqlLiteralChainOperator();

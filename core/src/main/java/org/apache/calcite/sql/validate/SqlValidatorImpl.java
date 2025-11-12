@@ -3041,6 +3041,33 @@ public class SqlValidatorImpl implements SqlValidatorWithHints {
       }
       break;
 
+    case MULTI:
+      call = (SqlCall) node;
+      scopes.put(call, parentScope);
+      final MultiNamespace multiNamespace =
+          new MultiNamespace(
+              this,
+              call,
+              parentScope,
+              enclosingNode);
+      registerNamespace(
+          usingScope,
+          alias,
+          multiNamespace,
+          forceNullable);
+      // Each operand of MULTI is a query that needs to be registered
+      operands = call.getOperandList();
+      for (int i = 0; i < operands.size(); ++i) {
+        registerQuery(
+            parentScope,
+            null,  // No using scope for sub-queries
+            operands.get(i),
+            call,  // Enclosing node is the MULTI call
+            null,  // No alias for sub-queries
+            false);
+      }
+      break;
+
     case INSERT:
       SqlInsert insertCall = (SqlInsert) node;
       InsertNamespace insertNs =

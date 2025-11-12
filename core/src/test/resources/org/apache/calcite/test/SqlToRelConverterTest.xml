@@ -10135,4 +10135,20 @@ LogicalAggregate(group=[{0}], EXPR$1=[COLLECT($1) WITHIN GROUP ([2])], EXPR$2=[C
 ]]>
     </Resource>
   </TestCase>
+  <TestCase name="testMultiBasic">
+    <Resource name="sql">
+      <![CDATA[MULTI((SELECT empno FROM emp WHERE empno = 7369), (SELECT deptno FROM dept WHERE deptno = 10))]]>
+    </Resource>
+    <Resource name="plan">
+      <![CDATA[
+Combine
+  LogicalProject(EMPNO=[$0])
+    LogicalFilter(condition=[=($0, 7369)])
+      LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+  LogicalProject(DEPTNO=[$0])
+    LogicalFilter(condition=[=($0, 10)])
+      LogicalTableScan(table=[[CATALOG, SALES, DEPT]])
+]]>
+    </Resource>
+  </TestCase>
 </Root>

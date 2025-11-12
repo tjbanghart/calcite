@@ -276,10 +276,20 @@ public class Bindables {
 
     @Override public @Nullable RelOptCost computeSelfCost(RelOptPlanner planner,
         RelMetadataQuery mq) {
+      RelOptCost cost = super.computeSelfCost(planner, mq);
+      if (cost == null) {
+        return null;
+      }
+
+      // If reading from a spool (temporary table), make it extremely cheap
+      // Spool reads are just reading from memory, very fast
+      if (table instanceof org.apache.calcite.plan.SpoolRelOptTable) {
+        return cost.multiplyBy(0.01);
+      }
+
       boolean noPushing = filters.isEmpty()
               && projects.size() == table.getRowType().getFieldCount();
-      RelOptCost cost = super.computeSelfCost(planner, mq);
-      if (noPushing || cost == null) {
+      if (noPushing) {
         return cost;
       }
       // Cost factor for pushing filters

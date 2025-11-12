@@ -171,6 +171,15 @@ class CoreQuidemTest extends QuidemTest {
                   SqlConformanceEnum.SQL_SERVER_2008)
               .with(CalciteAssert.Config.SCOTT)
               .connect();
+        case "scott-volcano":
+          // Same as "scott", but forces VolcanoPlanner by disabling decorrelation
+          return CalciteAssert.that()
+              .with(CalciteConnectionProperty.PARSER_FACTORY,
+                  ExtensionDdlExecutor.class.getName() + "#PARSER_FACTORY")
+              .with(CalciteConnectionProperty.FUN, SqlLibrary.CALCITE.fun)
+              .with(CalciteConnectionProperty.FORCE_DECORRELATE, false)
+              .with(CalciteAssert.Config.SCOTT)
+              .connect();
         case "steelwheels":
           return CalciteAssert.that()
               .with(CalciteConnectionProperty.PARSER_FACTORY,
@@ -201,11 +210,14 @@ class CoreQuidemTest extends QuidemTest {
     return new ExtendedCommandHandler();
   }
 
-  /** Command handler that adds a "!explain-validated-on dialect..." command
-   * (see {@link QuidemTest.ExplainValidatedCommand}). */
+  /** Command handler that adds custom commands including "!explain-validated-on dialect..."
+   * and "!viz". */
   private static class ExtendedCommandHandler implements CommandHandler {
     @Override public @Nullable Command parseCommand(List<String> lines,
         List<String> content, String line) {
+      if (line.equals("viz")) {
+        return new QuidemTest.VizCommand(lines, content);
+      }
       final String prefix = "explain-validated-on";
       if (line.startsWith(prefix)) {
         final Pattern pattern =

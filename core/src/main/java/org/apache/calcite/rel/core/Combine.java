@@ -91,6 +91,7 @@ public class Combine extends AbstractRelNode {
     // Each input maintains its own row type and is accessed independently.
     //
     // We use a struct type where each field represents one of the input queries.
+    // Each field is an ARRAY type because each query produces multiple rows.
     // This allows metadata and optimization rules to understand the structure
     // while making it clear that results are not unified into a single stream.
 
@@ -99,9 +100,11 @@ public class Combine extends AbstractRelNode {
 
     for (int i = 0; i < inputs.size(); i++) {
       RelNode input = inputs.get(i);
-      // Create a field for each input with its row type
-      // Field names are "QUERY_0", "QUERY_1", etc.
-      builder.add("QUERY_" + i, input.getRowType());
+      // Create a field for each input as an ARRAY of its row type
+      // because each query produces multiple rows, not a single struct
+      // Field names are "EXPR$0", "EXPR$1", etc. to match the validator
+      RelDataType arrayType = typeFactory.createArrayType(input.getRowType(), -1);
+      builder.add("EXPR$" + i, arrayType);
     }
 
     return builder.build();

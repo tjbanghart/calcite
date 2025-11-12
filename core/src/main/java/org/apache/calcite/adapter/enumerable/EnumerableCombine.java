@@ -47,9 +47,10 @@ public class EnumerableCombine extends Combine implements EnumerableRel {
   @Override public Result implement(EnumerableRelImplementor implementor, Prefer pref) {
     final BlockBuilder builder = new BlockBuilder();
     final RelDataType rowType = getRowType();
-    final List<Expression> expressions = new ArrayList<>();
+    final List<Expression> fieldExpressions = new ArrayList<>();
 
     // Implement each input and collect their results
+    // Convert each Enumerable to a List since the row type is STRUCT<QUERY_0: ARRAY<...>, ...>
     for (Ord<RelNode> ord : Ord.zip(inputs)) {
       EnumerableRel input = (EnumerableRel) ord.e;
       final Result result = implementor.visitChild(this, ord.i, input, pref);
@@ -57,14 +58,19 @@ public class EnumerableCombine extends Combine implements EnumerableRel {
           builder.append(
               "child" + ord.i,
               result.block);
-      expressions.add(childExp);
+
+      // Convert Enumerable to List for the array field
+      // Each field in the struct is an ARRAY type, which maps to List in Java
+      Expression listExp =
+          builder.append(
+              "list" + ord.i,
+              Expressions.call(
+                  childExp,
+                  Types.lookupMethod(
+                      org.apache.calcite.linq4j.Enumerable.class,
+                      "toList")));
+      fieldExpressions.add(listExp);
     }
-
-    // Create an array of enumerables, one for each query
-    final Expression arrayExpression =
-        Expressions.newArrayInit(Object.class, expressions);
-
-    builder.add(arrayExpression);
 
     // The physical type represents the struct of all query results
     final PhysType physType =
@@ -72,6 +78,22 @@ public class EnumerableCombine extends Combine implements EnumerableRel {
             implementor.getTypeFactory(),
             rowType,
             pref.prefer(JavaRowFormat.CUSTOM));
+
+    // Create the struct record with the list fields
+    final Expression recordExpression =
+        physType.record(fieldExpressions);
+
+    // Return a singleton enumerable containing the struct as the single row
+    // The Combine operator produces exactly one row containing all the child results
+    final Expression singletonExpression =
+        Expressions.call(
+            Types.lookupMethod(
+                org.apache.calcite.linq4j.Linq4j.class,
+                "singletonEnumerable",
+                Object.class),
+            recordExpression);
+
+    builder.add(singletonExpression);
 
     return implementor.result(physType, builder.toBlock());
   }

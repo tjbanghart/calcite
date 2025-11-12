@@ -3960,6 +3960,8 @@ public class SqlToRelConverter {
       return convertWith((SqlWith) query, top);
     case VALUES:
       return RelRoot.of(convertValues((SqlCall) query, targetRowType), kind);
+    case MULTI:
+      return RelRoot.of(convertMulti((SqlCall) query), kind);
     default:
       throw new AssertionError("not a query: " + query);
     }
@@ -4917,6 +4919,32 @@ public class SqlToRelConverter {
    */
   public RelRoot convertWith(SqlWith with, boolean top) {
     return convertQuery(with.body, false, top);
+  }
+
+  /**
+   * Converts a MULTI expression into a Combine relational expression.
+   *
+   * <p>Example:
+   * <blockquote><pre>{@code
+   * MULTI((SELECT * FROM users), (SELECT id FROM users))
+   * }</pre></blockquote>
+   *
+   * @param multiCall Call to SQL MULTI operator
+   * @return Combine RelNode with each query as an input
+   */
+  public RelNode convertMulti(SqlCall multiCall) {
+    // Convert each operand (each query) to a RelNode
+    final List<RelNode> inputs = new ArrayList<>();
+    for (SqlNode operand : multiCall.getOperandList()) {
+      // Each operand is a query - convert it recursively
+      RelRoot root = convertQueryRecursive(operand, false, null);
+      inputs.add(root.rel);
+    }
+
+    // Create a Combine node with all the converted queries
+    return relBuilder
+        .combine(inputs)
+        .build();
   }
 
   /**

@@ -29,10 +29,12 @@ import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeField;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.schema.ColumnStrategy;
+import org.apache.calcite.schema.ModifiableTable;
 import org.apache.calcite.schema.ScannableTable;
 import org.apache.calcite.schema.Schema;
 import org.apache.calcite.schema.Statistic;
 import org.apache.calcite.schema.Statistics;
+import org.apache.calcite.schema.Table;
 import org.apache.calcite.sql.SqlCall;
 import org.apache.calcite.sql.SqlNode;
 import org.apache.calcite.util.ImmutableBitSet;
@@ -41,8 +43,10 @@ import com.google.common.collect.ImmutableList;
 
 import org.checkerframework.checker.nullness.qual.Nullable;
 
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Implementation of {@link RelOptTable} for temporary spool tables.
@@ -199,9 +203,14 @@ public class SpoolRelOptTable implements RelOptTable {
 
     @Override
     public Enumerable<@Nullable Object[]> scan(DataContext root) {
-      // At runtime, this should look up the materialized data from the DataContext
-      // For now, this is a placeholder - the actual runtime implementation
-      // would retrieve data from the spool operator's materialized storage
+      // Read from the modifiable collection that was populated by the spool operator
+      final Table table = Objects.requireNonNull(root.getRootSchema()).tables().get(name);
+      if (table instanceof ModifiableTable) {
+        final ModifiableTable modifiableTable = (ModifiableTable) table;
+        final Collection<Object[]> collection =
+            (Collection<Object[]>) modifiableTable.getModifiableCollection();
+        return org.apache.calcite.linq4j.Linq4j.asEnumerable(collection);
+      }
       throw new UnsupportedOperationException(
           "Spool table '" + name + "' scan not yet implemented at runtime. "
           + "This table should be accessed through the spool operator.");

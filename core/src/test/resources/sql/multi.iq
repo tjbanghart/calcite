@@ -1,0 +1,45 @@
+# multi.iq - Tests for MULTI operator
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to you under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+!use scott-volcano
+!set outputformat mysql
+
+# Skip all HepPlanner preprocessing (including calc conversion)
+# and go directly to VolcanoPlanner for optimization
+!set volcanoonly true
+# Add CombineSharedComponentsRule - spool conversion should happen automatically
+# (BINDABLE_TABLE_SCAN_RULE and TO_INTERPRETER are already registered by default)
+!set planner-rules "+COMBINE_SHARED_COMPONENTS"
+
+# Test basic MULTI with two simple queries - execution
+MULTI(
+    (SELECT EMPNO, SAL FROM (SELECT * FROM EMP WHERE SAL > 1000)),
+    (SELECT ENAME, DEPTNO FROM (SELECT * FROM EMP WHERE SAL > 1000))
+);
+EnumerableCombine
+  EnumerableProject(EMPNO=[$0], SAL=[$5])
+    EnumerableFilter(condition=[>(CAST($5):DECIMAL(12, 2), 1000.00)])
+      EnumerableTableSpool(readType=[LAZY], writeType=[EAGER], table=[[TEMP, spool_0]])
+        EnumerableTableScan(table=[[scott, EMP]])
+  EnumerableProject(ENAME=[$1], DEPTNO=[$7])
+    EnumerableFilter(condition=[>(CAST($5):DECIMAL(12, 2), 1000.00)])
+      EnumerableInterpreter
+        BindableTableScan(table=[[TEMP, spool_0]])
+!plan
+!ok
+
+# End multi.iq

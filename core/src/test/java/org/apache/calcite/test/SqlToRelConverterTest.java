@@ -5882,4 +5882,18 @@ class SqlToRelConverterTest extends SqlToRelTestBase {
     String sql = "SELECT CAST(CAST(? AS INTEGER) AS CHAR)";
     sql(sql).ok();
   }
+
+  @Test void testMultiBasic() {
+    final String sql = "MULTI("
+        + "(SELECT empno FROM emp WHERE empno = 7369), "
+        + "(SELECT deptno FROM dept WHERE deptno = 10))";
+    sql(sql).withDecorrelate(false).withTrim(false).ok();
+  }
+
+  @Test void testMultiWithValues() {
+    final String sql = "MULTI("
+        + "(VALUES (1, 10)), "
+        + "(VALUES (2, 20)))";
+    sql(sql).withDecorrelate(false).withTrim(false).ok();
+  }
 }

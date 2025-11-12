@@ -945,4 +945,9 @@ public class CoreRules {
    *  into equivalent {@link Union} ALL of GROUP BY operations. */
   public static final AggregateGroupingSetsToUnionRule AGGREGATE_GROUPING_SETS_TO_UNION =
       AggregateGroupingSetsToUnionRule.Config.DEFAULT.toRule();
+
+  /** Rule that optimizes a Combine operator by detecting shared components
+   * and introducing spools to avoid redundant computation. */
+  public static final CombineSharedComponentsRule COMBINE_SHARED_COMPONENTS =
+      CombineSharedComponentsRule.Config.DEFAULT.toRule();
 }

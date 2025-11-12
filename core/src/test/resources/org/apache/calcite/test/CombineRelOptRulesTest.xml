@@ -231,4 +231,29 @@ EnumerableCombine
 ]]>
     </Resource>
   </TestCase>
+  <TestCase name="testCombineWithSharedFilteredBaseSQL">
+    <Resource name="planBefore">
+      <![CDATA[
+Combine
+  LogicalProject(EMPNO=[$0], SAL=[$5])
+    LogicalFilter(condition=[>($5, 1000)])
+      LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+  LogicalProject(ENAME=[$1], DEPTNO=[$7])
+    LogicalFilter(condition=[>($5, 1000)])
+      LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+]]>
+    </Resource>
+    <Resource name="planAfter">
+      <![CDATA[
+EnumerableCombine
+  EnumerableProject(EMPNO=[$0], SAL=[$5])
+    EnumerableTableSpool(readType=[LAZY], writeType=[EAGER], table=[[TEMP, spool_0]])
+      EnumerableFilter(condition=[>($5, 1000)])
+        EnumerableTableScan(table=[[CATALOG, SALES, EMP]])
+  EnumerableProject(ENAME=[$1], DEPTNO=[$7])
+    EnumerableInterpreter
+      BindableTableScan(table=[[TEMP, spool_0]])
+]]>
+    </Resource>
+  </TestCase>
 </Root>

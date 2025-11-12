@@ -21,6 +21,8 @@ import org.apache.calcite.linq4j.tree.BlockBuilder;
 import org.apache.calcite.linq4j.tree.Expression;
 import org.apache.calcite.linq4j.tree.Expressions;
 import org.apache.calcite.plan.RelOptCluster;
+import org.apache.calcite.plan.RelOptCost;
+import org.apache.calcite.plan.RelOptPlanner;
 import org.apache.calcite.plan.RelOptTable;
 import org.apache.calcite.plan.RelTraitSet;
 import org.apache.calcite.rel.RelCollationTraitDef;
@@ -31,6 +33,8 @@ import org.apache.calcite.rel.core.TableSpool;
 import org.apache.calcite.rel.metadata.RelMetadataQuery;
 import org.apache.calcite.schema.ModifiableTable;
 import org.apache.calcite.util.BuiltInMethod;
+
+import org.checkerframework.checker.nullness.qual.Nullable;
 
 /**
  * Implementation of {@link TableSpool} in
@@ -107,5 +111,19 @@ public class EnumerableTableSpool extends TableSpool implements EnumerableRel {
       Type readType, Type writeType) {
     return new EnumerableTableSpool(input.getCluster(), traitSet, input,
         readType, writeType, table);
+  }
+
+  @Override public @Nullable RelOptCost computeSelfCost(RelOptPlanner planner,
+      RelMetadataQuery mq) {
+    // Make spools very cheap to encourage their use when sharing computation
+    // The spool writes the input once and allows multiple consumers to read it
+    // This is much cheaper than scanning the same table multiple times
+    RelOptCost inputCost = mq.getCumulativeCost(getInput());
+    if (inputCost == null) {
+      return null;
+    }
+    // Spool cost is just a tiny fraction of input cost to make it attractive
+    // The real benefit is that consumers read from memory, not rescanning
+    return inputCost.multiplyBy(0.1);
   }
 }

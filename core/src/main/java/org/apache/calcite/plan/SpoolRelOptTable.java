@@ -16,9 +16,6 @@
  */
 package org.apache.calcite.plan;
 
-import org.apache.calcite.DataContext;
-import org.apache.calcite.config.CalciteConnectionConfig;
-import org.apache.calcite.linq4j.Enumerable;
 import org.apache.calcite.linq4j.tree.Expression;
 import org.apache.calcite.rel.RelCollation;
 import org.apache.calcite.rel.RelDistribution;
@@ -27,26 +24,19 @@ import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.RelReferentialConstraint;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeField;
-import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.schema.ColumnStrategy;
-import org.apache.calcite.schema.ModifiableTable;
-import org.apache.calcite.schema.ScannableTable;
-import org.apache.calcite.schema.Schema;
 import org.apache.calcite.schema.Statistic;
 import org.apache.calcite.schema.Statistics;
 import org.apache.calcite.schema.Table;
-import org.apache.calcite.sql.SqlCall;
-import org.apache.calcite.sql.SqlNode;
+import org.apache.calcite.schema.impl.ListTransientTable;
 import org.apache.calcite.util.ImmutableBitSet;
 
 import com.google.common.collect.ImmutableList;
 
 import org.checkerframework.checker.nullness.qual.Nullable;
 
-import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
-import java.util.Objects;
 
 /**
  * Implementation of {@link RelOptTable} for temporary spool tables.
@@ -60,7 +50,7 @@ public class SpoolRelOptTable implements RelOptTable {
   private final RelDataType rowType;
   private final String name;
   private final double rowCount;
-  private final SpoolScannableTable scannableTable;
+  private final Table table;
 
   /**
    * Creates a SpoolRelOptTable with explicit row count.
@@ -75,7 +65,13 @@ public class SpoolRelOptTable implements RelOptTable {
     this.rowType = rowType;
     this.name = name;
     this.rowCount = rowCount;
-    this.scannableTable = new SpoolScannableTable(rowType, rowCount, name);
+    // Use standard ListTransientTable with custom statistics for accurate cost estimation
+    this.table = new ListTransientTable(name, rowType) {
+      @Override
+      public Statistic getStatistic() {
+        return Statistics.of(rowCount, ImmutableList.of());
+      }
+    };
   }
 
   @Override
@@ -152,68 +148,9 @@ public class SpoolRelOptTable implements RelOptTable {
 
   @Override
   public <C> @Nullable C unwrap(Class<C> aClass) {
-    if (aClass.isInstance(scannableTable)) {
-      return aClass.cast(scannableTable);
+    if (aClass.isInstance(table)) {
+      return aClass.cast(table);
     }
     return null;
-  }
-
-  /**
-   * ScannableTable implementation for spool tables.
-   * At runtime, this will look up the materialized data from the spool context.
-   */
-  private static class SpoolScannableTable implements ScannableTable {
-    private final RelDataType rowType;
-    private final double rowCount;
-    private final String name;
-
-    SpoolScannableTable(RelDataType rowType, double rowCount, String name) {
-      this.rowType = rowType;
-      this.rowCount = rowCount;
-      this.name = name;
-    }
-
-    @Override
-    public RelDataType getRowType(RelDataTypeFactory typeFactory) {
-      return rowType;
-    }
-
-    @Override
-    public Statistic getStatistic() {
-      return Statistics.of(rowCount, ImmutableList.of());
-    }
-
-    @Override
-    public Schema.TableType getJdbcTableType() {
-      return Schema.TableType.TABLE;
-    }
-
-    @Override
-    public boolean isRolledUp(String column) {
-      return false;
-    }
-
-    @Override
-    public boolean rolledUpColumnValidInsideAgg(String column,
-        SqlCall call,
-        SqlNode parent,
-        CalciteConnectionConfig config) {
-      return false;
-    }
-
-    @Override
-    public Enumerable<@Nullable Object[]> scan(DataContext root) {
-      // Read from the modifiable collection that was populated by the spool operator
-      final Table table = Objects.requireNonNull(root.getRootSchema()).tables().get(name);
-      if (table instanceof ModifiableTable) {
-        final ModifiableTable modifiableTable = (ModifiableTable) table;
-        final Collection<Object[]> collection =
-            (Collection<Object[]>) modifiableTable.getModifiableCollection();
-        return org.apache.calcite.linq4j.Linq4j.asEnumerable(collection);
-      }
-      throw new UnsupportedOperationException(
-          "Spool table '" + name + "' scan not yet implemented at runtime. "
-          + "This table should be accessed through the spool operator.");
-    }
   }
 }

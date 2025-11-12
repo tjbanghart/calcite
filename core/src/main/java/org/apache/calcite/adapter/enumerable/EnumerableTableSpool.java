@@ -32,9 +32,12 @@ import org.apache.calcite.rel.core.Spool;
 import org.apache.calcite.rel.core.TableSpool;
 import org.apache.calcite.rel.metadata.RelMetadataQuery;
 import org.apache.calcite.schema.ModifiableTable;
+import org.apache.calcite.schema.TransientTable;
 import org.apache.calcite.util.BuiltInMethod;
 
 import org.checkerframework.checker.nullness.qual.Nullable;
+
+import static java.util.Objects.requireNonNull;
 
 /**
  * Implementation of {@link TableSpool} in
@@ -73,25 +76,42 @@ public class EnumerableTableSpool extends TableSpool implements EnumerableRel {
           "EnumerableTableSpool supports for the moment only LAZY read and LAZY write");
     }
 
+    //  root.getRootSchema().add(tableName, transientTable);
     //  ModifiableTable t = (ModifiableTable) root.getRootSchema().getTable(tableName);
     //  return lazyCollectionSpool(t.getModifiableCollection(), <inputExp>);
 
     BlockBuilder builder = new BlockBuilder();
 
+    String tableName = table.getQualifiedName().get(table.getQualifiedName().size() - 1);
+
+    // Register the transient table in the schema (similar to EnumerableRepeatUnion)
+    TransientTable transientTable = requireNonNull(table.unwrap(TransientTable.class),
+        "Spool table must be a TransientTable");
+    Expression tableExp = implementor.stash(transientTable, TransientTable.class);
+    Expression tableNameExp = Expressions.constant(tableName, String.class);
+    builder.append(
+        Expressions.call(
+            Expressions.call(
+                implementor.getRootExpression(),
+                BuiltInMethod.DATA_CONTEXT_GET_ROOT_SCHEMA.method),
+            BuiltInMethod.SCHEMA_PLUS_ADD_TABLE.method,
+            tableNameExp,
+            tableExp));
+
     RelNode input = getInput();
     Result inputResult = implementor.visitChild(this, 0, (EnumerableRel) input, pref);
 
-    String tableName = table.getQualifiedName().get(table.getQualifiedName().size() - 1);
-    Expression tableExp =
+    // Now look up the registered table from the schema
+    Expression modifiableTableExp =
         Expressions.convert_(
             Expressions.call(
                 Expressions.call(implementor.getRootExpression(),
                     BuiltInMethod.DATA_CONTEXT_GET_ROOT_SCHEMA.method),
                 BuiltInMethod.SCHEMA_GET_TABLE.method,
-                Expressions.constant(tableName, String.class)),
+                tableNameExp),
             ModifiableTable.class);
     Expression collectionExp =
-        Expressions.call(tableExp,
+        Expressions.call(modifiableTableExp,
             BuiltInMethod.MODIFIABLE_TABLE_GET_MODIFIABLE_COLLECTION.method);
 
     Expression inputExp = builder.append("input", inputResult.block);

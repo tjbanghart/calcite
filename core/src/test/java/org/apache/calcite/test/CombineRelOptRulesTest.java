@@ -16,34 +16,22 @@
  */
 package org.apache.calcite.test;
 
-import org.apache.calcite.adapter.enumerable.EnumerableRules;
-import org.apache.calcite.plan.RelOptPlanner;
 import org.apache.calcite.plan.RelOptUtil;
-import org.apache.calcite.plan.hep.HepPlanner;
-import org.apache.calcite.plan.hep.HepProgram;
-import org.apache.calcite.plan.hep.HepProgramBuilder;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.rules.CombineSharedComponentsRule;
-import org.apache.calcite.runtime.Hook;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
-import org.apache.calcite.tools.Programs;
 import org.apache.calcite.tools.RelBuilder;
 
 import org.junit.jupiter.api.Test;
 
-import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
- * Unit tests for {@link CombineSharedComponentsRule} and other Combine-related rules.
+ * Unit tests for {@link CombineSharedComponentsRule} demonstrating various
+ * shared component patterns including joins, filters, aggregations, and projections.
  *
- * <p>These tests verify the transformation of multiple independent queries
- * into a Combine operator structure that enables independent optimization
- * of each query branch.
- *
- * <p>Note: The CombineSharedComponentsRule currently only detects shared components
- * but doesn't transform them yet. Full spool-based optimization would be implemented
- * in a production version.
+ * <p>These tests verify that the rule can identify and optimize shared
+ * relational operations beyond simple table scans.
  */
 class CombineRelOptRulesTest extends RelOptTestBase {
 
@@ -52,250 +40,440 @@ class CombineRelOptRulesTest extends RelOptTestBase {
         .withDiffRepos(DiffRepository.lookup(CombineRelOptRulesTest.class));
   }
 
-  @Test void testCombineTwoSimpleScans() {
-    // Two independent queries that just scan the same table
+  // ========== Shared Join Tests ==========
+
+  @Test void testSharedJoin() {
+    // Two queries sharing the same EMP-DEPT join
+    // Query 1: SELECT E.EMPNO, D.DNAME FROM EMP E JOIN DEPT D ON E.DEPTNO = D.DEPTNO WHERE E.SAL > 2000
+    // Query 2: SELECT E.ENAME, D.LOC FROM EMP E JOIN DEPT D ON E.DEPTNO = D.DEPTNO WHERE D.LOC = 'CHICAGO'
     final Function<RelBuilder, RelNode> relFn = b -> {
-      // Query 1: SELECT * FROM EMP
-      b.scan("EMP");
-
-      // Query 2: SELECT * FROM EMP (same scan, but independent query)
-      b.scan("EMP");
-
-      // Combine the two queries on the stack
-      return b.combine(2).build();
-    };
-
-    relFn(relFn)
-        .withRule(CombineSharedComponentsRule.Config.DEFAULT.toRule())
-        .check();
-  }
-
-  @Test void testCombineScansWithDifferentFilters() {
-    // Two independent queries with different filters resulting in different row counts
-    final Function<RelBuilder, RelNode> relFn = b -> {
-      // Query 1: SELECT * FROM EMP WHERE SAL > 3000
+      // Query 1
       b.scan("EMP")
+          .scan("DEPT")
+          .join(b.call(SqlStdOperatorTable.EQUALS,
+              b.field(2, 0, "DEPTNO"),
+              b.field(2, 1, "DEPTNO")))
           .filter(b.call(SqlStdOperatorTable.GREATER_THAN,
-                         b.field("SAL"),
-                         b.literal(3000)));
+              b.field("SAL"),
+              b.literal(2000)))
+          .project(b.field("EMPNO"), b.field("DNAME"));
 
-      // Query 2: SELECT * FROM EMP WHERE DEPTNO = 10
+      // Query 2
       b.scan("EMP")
+          .scan("DEPT")
+          .join(b.call(SqlStdOperatorTable.EQUALS,
+              b.field(2, 0, "DEPTNO"),
+              b.field(2, 1, "DEPTNO")))
           .filter(b.call(SqlStdOperatorTable.EQUALS,
-                         b.field("DEPTNO"),
-                         b.literal(10)));
+              b.field("LOC"),
+              b.literal("CHICAGO")))
+          .project(b.field("ENAME"), b.field("LOC"));
 
-      // Combine the two filtered queries
-      return b.combine().build();
+      return b.combine(2).build();
     };
 
     relFn(relFn)
         .withVolcanoPlanner(false, planner -> {
-          // Register enumerable conversion rules (needed for VolcanoPlanner)
           RelOptUtil.registerDefaultRules(planner, false, false);
           planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
         })
-        .vis();
-//        .check();
-  }
-
-  @Test void testCombineQueriesWithDifferentProjections() {
-    // Two queries with different projections - different row types
-    final Function<RelBuilder, RelNode> relFn = b -> {
-      // Query 1: SELECT EMPNO, ENAME FROM EMP
-      b.scan("EMP")
-          .project(b.field("EMPNO"), b.field("ENAME"));
-
-      // Query 2: SELECT DEPTNO, SAL, COMM FROM EMP
-      b.scan("EMP")
-          .project(b.field("DEPTNO"), b.field("SAL"), b.field("COMM"));
-
-      // Combine the two projected queries
-      return b.combine(2).build();
-    };
-
-    relFn(relFn)
-        .withRule(CombineSharedComponentsRule.Config.DEFAULT.toRule())
-        .vis();
-  }
-
-  @Test void testCombineAggregateQueries() {
-    // Two independent aggregate queries with different groupings and aggregations
-    final Function<RelBuilder, RelNode> relFn = b -> {
-      // Query 1: SELECT DEPTNO, COUNT(*) FROM EMP GROUP BY DEPTNO
-      b.scan("EMP")
-          .aggregate(b.groupKey("DEPTNO"),
-                    b.count(false, "CNT"));
-
-      // Query 2: SELECT JOB, AVG(SAL), MAX(SAL) FROM EMP GROUP BY JOB
-      b.scan("EMP")
-          .aggregate(b.groupKey("JOB"),
-                    b.avg(false, "AVG_SAL", b.field("SAL")),
-                    b.max("MAX_SAL", b.field("SAL")));
-
-      // Combine the two aggregate queries
-      return b.combine(2).build();
-    };
-
-    relFn(relFn)
-        .withRule(CombineSharedComponentsRule.Config.DEFAULT.toRule())
         .check();
   }
 
-  @Test void testCombineThreeIndependentQueries() {
-    // Three independent queries with different characteristics
+  @Test void testSharedComplexJoin() {
+    // Multiple queries sharing a 3-way join: EMP -> DEPT -> SALGRADE
+    // Query 1: Count employees per department grade
+    // Query 2: Average salary per department grade
     final Function<RelBuilder, RelNode> relFn = b -> {
-      // Query 1: Simple scan
-      b.scan("EMP");
-
-      // Query 2: Filtered and projected
+      // Query 1: SELECT D.DNAME, S.GRADE, COUNT(*) ...
       b.scan("EMP")
-          .filter(b.call(SqlStdOperatorTable.GREATER_THAN,
-                         b.field("SAL"),
-                         b.literal(2000)))
+          .scan("DEPT")
+          .join(b.call(SqlStdOperatorTable.EQUALS,
+              b.field(2, 0, "DEPTNO"),
+              b.field(2, 1, "DEPTNO")))
+          .scan("SALGRADE")
+          .join(b.call(SqlStdOperatorTable.AND,
+              b.call(SqlStdOperatorTable.GREATER_THAN_OR_EQUAL,
+                  b.field(2, 0, "SAL"),
+                  b.field(2, 1, "LOSAL")),
+              b.call(SqlStdOperatorTable.LESS_THAN_OR_EQUAL,
+                  b.field(2, 0, "SAL"),
+                  b.field(2, 1, "HISAL"))))
+          .aggregate(
+              b.groupKey("DNAME", "GRADE"),
+              b.count(false, "EMP_COUNT"));
+
+      // Query 2: SELECT D.DNAME, S.GRADE, AVG(SAL) ...
+      b.scan("EMP")
+          .scan("DEPT")
+          .join(b.call(SqlStdOperatorTable.EQUALS,
+              b.field(2, 0, "DEPTNO"),
+              b.field(2, 1, "DEPTNO")))
+          .scan("SALGRADE")
+          .join(b.call(SqlStdOperatorTable.AND,
+              b.call(SqlStdOperatorTable.GREATER_THAN_OR_EQUAL,
+                  b.field(2, 0, "SAL"),
+                  b.field(2, 1, "LOSAL")),
+              b.call(SqlStdOperatorTable.LESS_THAN_OR_EQUAL,
+                  b.field(2, 0, "SAL"),
+                  b.field(2, 1, "HISAL"))))
+          .aggregate(
+              b.groupKey("DNAME", "GRADE"),
+              b.avg(false, "AVG_SAL", b.field("SAL")));
+
+      return b.combine(2).build();
+    };
+
+    relFn(relFn)
+        .withVolcanoPlanner(false, planner -> {
+          RelOptUtil.registerDefaultRules(planner, false, false);
+          planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
+        })
+        .check();
+  }
+
+  // ========== Shared Filter Tests ==========
+
+  @Test void testSharedFilter() {
+    // Two queries sharing the same filter condition
+    // Query 1: SELECT EMPNO, SAL FROM EMP WHERE SAL > 2000 AND DEPTNO = 10
+    // Query 2: SELECT ENAME, JOB FROM EMP WHERE SAL > 2000 AND DEPTNO = 10
+    final Function<RelBuilder, RelNode> relFn = b -> {
+      // Query 1
+      b.scan("EMP")
+          .filter(
+              b.call(SqlStdOperatorTable.AND,
+                  b.call(SqlStdOperatorTable.GREATER_THAN,
+                      b.field("SAL"),
+                      b.literal(2000)),
+                  b.call(SqlStdOperatorTable.EQUALS,
+                      b.field("DEPTNO"),
+                      b.literal(10))))
           .project(b.field("EMPNO"), b.field("SAL"));
 
-      // Query 3: Aggregation
+      // Query 2
       b.scan("EMP")
-          .aggregate(b.groupKey("DEPTNO"),
-                    b.sum(false, "TOTAL_SAL", b.field("SAL")));
+          .filter(
+              b.call(SqlStdOperatorTable.AND,
+                  b.call(SqlStdOperatorTable.GREATER_THAN,
+                      b.field("SAL"),
+                      b.literal(2000)),
+                  b.call(SqlStdOperatorTable.EQUALS,
+                      b.field("DEPTNO"),
+                      b.literal(10))))
+          .project(b.field("ENAME"), b.field("JOB"));
 
-      // Combine all three queries
-      return b.combine(3)
-          .build();
+      return b.combine(2).build();
     };
 
     relFn(relFn)
         .withVolcanoPlanner(false, planner -> {
-          // Register enumerable conversion rules (needed for VolcanoPlanner)
           RelOptUtil.registerDefaultRules(planner, false, false);
           planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
         })
-        .vis();
+        .check();
   }
 
-  @Test void testCombineDifferentTables() {
-    // Independent queries from different tables
+  @Test void testSharedFilterWithDifferentProjections() {
+    // Three queries sharing same filter but different projections
     final Function<RelBuilder, RelNode> relFn = b -> {
-      // Query 1: SELECT * FROM EMP WHERE SAL > 2500
+      // Shared filter: EMP WHERE SAL BETWEEN 1000 AND 3000
+      // Query 1: Count
       b.scan("EMP")
-          .filter(b.call(SqlStdOperatorTable.GREATER_THAN,
-                         b.field("SAL"),
-                         b.literal(2500)));
+          .filter(
+              b.call(SqlStdOperatorTable.AND,
+                  b.call(SqlStdOperatorTable.GREATER_THAN_OR_EQUAL,
+                      b.field("SAL"),
+                      b.literal(1000)),
+                  b.call(SqlStdOperatorTable.LESS_THAN_OR_EQUAL,
+                      b.field("SAL"),
+                      b.literal(3000))))
+          .aggregate(b.groupKey(), b.count(false, "CNT"));
 
-      // Query 2: SELECT * FROM DEPT WHERE LOC = 'DALLAS'
+      // Query 2: Average salary
+      b.scan("EMP")
+          .filter(
+              b.call(SqlStdOperatorTable.AND,
+                  b.call(SqlStdOperatorTable.GREATER_THAN_OR_EQUAL,
+                      b.field("SAL"),
+                      b.literal(1000)),
+                  b.call(SqlStdOperatorTable.LESS_THAN_OR_EQUAL,
+                      b.field("SAL"),
+                      b.literal(3000))))
+          .aggregate(b.groupKey(), b.avg(false, "AVG_SAL", b.field("SAL")));
+
+      // Query 3: List of names
+      b.scan("EMP")
+          .filter(
+              b.call(SqlStdOperatorTable.AND,
+                  b.call(SqlStdOperatorTable.GREATER_THAN_OR_EQUAL,
+                      b.field("SAL"),
+                      b.literal(1000)),
+                  b.call(SqlStdOperatorTable.LESS_THAN_OR_EQUAL,
+                      b.field("SAL"),
+                      b.literal(3000))))
+          .project(b.field("ENAME"), b.field("SAL"));
+
+      return b.combine(3).build();
+    };
+
+    relFn(relFn)
+        .withVolcanoPlanner(false, planner -> {
+          RelOptUtil.registerDefaultRules(planner, false, false);
+          planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
+        })
+        .check();
+  }
+
+  // ========== Shared Aggregation Tests ==========
+
+  @Test void testSharedAggregationBase() {
+    // Two queries that could share aggregation computation
+    // Query 1: SELECT DEPTNO, SUM(SAL), COUNT(*) FROM EMP GROUP BY DEPTNO
+    // Query 2: SELECT DEPTNO, SUM(SAL) FROM EMP GROUP BY DEPTNO WHERE SUM(SAL) > 10000
+    final Function<RelBuilder, RelNode> relFn = b -> {
+      // Query 1: Basic aggregation
+      b.scan("EMP")
+          .aggregate(
+              b.groupKey("DEPTNO"),
+              b.sum(false, "TOTAL_SAL", b.field("SAL")),
+              b.count(false, "EMP_CNT"));
+
+      // Query 2: Same aggregation with HAVING clause
+      b.scan("EMP")
+          .aggregate(
+              b.groupKey("DEPTNO"),
+              b.sum(false, "TOTAL_SAL", b.field("SAL")))
+          .filter(
+              b.call(SqlStdOperatorTable.GREATER_THAN,
+                  b.field("TOTAL_SAL"),
+                  b.literal(10000)));
+
+      return b.combine(2).build();
+    };
+
+    relFn(relFn)
+        .withVolcanoPlanner(false, planner -> {
+          RelOptUtil.registerDefaultRules(planner, false, false);
+          planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
+        })
+        .check();
+  }
+
+  @Test void testSharedJoinThenAggregation() {
+    // Queries sharing join followed by different aggregations
+    // Query 1: Total salary by department
+    // Query 2: Employee count by location
+    final Function<RelBuilder, RelNode> relFn = b -> {
+      // Query 1: SELECT D.DNAME, SUM(E.SAL) FROM EMP E JOIN DEPT D ... GROUP BY D.DNAME
+      b.scan("EMP")
+          .scan("DEPT")
+          .join(b.call(SqlStdOperatorTable.EQUALS,
+              b.field(2, 0, "DEPTNO"),
+              b.field(2, 1, "DEPTNO")))
+          .aggregate(
+              b.groupKey("DNAME"),
+              b.sum(false, "TOTAL_SAL", b.field("SAL")));
+
+      // Query 2: SELECT D.LOC, COUNT(*) FROM EMP E JOIN DEPT D ... GROUP BY D.LOC
+      b.scan("EMP")
+          .scan("DEPT")
+          .join(b.call(SqlStdOperatorTable.EQUALS,
+              b.field(2, 0, "DEPTNO"),
+              b.field(2, 1, "DEPTNO")))
+          .aggregate(
+              b.groupKey("LOC"),
+              b.count(false, "EMP_CNT"));
+
+      return b.combine(2).build();
+    };
+
+    relFn(relFn)
+        .withVolcanoPlanner(false, planner -> {
+          RelOptUtil.registerDefaultRules(planner, false, false);
+          planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
+        })
+        .check();
+  }
+
+  // ========== Shared Projection Tests ==========
+
+  @Test void testSharedProjection() {
+    // Queries sharing same projection from base table
+    final Function<RelBuilder, RelNode> relFn = b -> {
+      // Query 1: Filter on projected data
+      b.scan("EMP")
+          .project(
+              b.field("EMPNO"),
+              b.field("ENAME"),
+              b.call(SqlStdOperatorTable.MULTIPLY,
+                  b.field("SAL"),
+                  b.literal(12)))  // Annual salary calculation
+          .filter(
+              b.call(SqlStdOperatorTable.GREATER_THAN,
+                  b.field(2),
+                  b.literal(50000)));
+
+      // Query 2: Aggregate on same projected data
+      b.scan("EMP")
+          .project(
+              b.field("EMPNO"),
+              b.field("ENAME"),
+              b.call(SqlStdOperatorTable.MULTIPLY,
+                  b.field("SAL"),
+                  b.literal(12)))
+          .aggregate(
+              b.groupKey(),
+              b.avg(false, "AVG_ANNUAL", b.field(2)));
+
+      return b.combine(2).build();
+    };
+
+    relFn(relFn)
+        .withVolcanoPlanner(false, planner -> {
+          RelOptUtil.registerDefaultRules(planner, false, false);
+          planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
+        })
+        .check();
+  }
+
+  // ========== Complex Shared Pattern Tests ==========
+
+  @Test void testSharedFilterJoinAggregate() {
+    // Complex pattern: Filter -> Join -> different aggregations
+    final Function<RelBuilder, RelNode> relFn = b -> {
+      // Query 1: High earners by department with count
+      b.scan("EMP")
+          .filter(
+              b.call(SqlStdOperatorTable.GREATER_THAN,
+                  b.field("SAL"),
+                  b.literal(2000)))
+          .scan("DEPT")
+          .join(b.call(SqlStdOperatorTable.EQUALS,
+              b.field(2, 0, "DEPTNO"),
+              b.field(2, 1, "DEPTNO")))
+          .aggregate(
+              b.groupKey("DNAME"),
+              b.count(false, "HIGH_EARNER_CNT"));
+
+      // Query 2: High earners by department with average
+      b.scan("EMP")
+          .filter(
+              b.call(SqlStdOperatorTable.GREATER_THAN,
+                  b.field("SAL"),
+                  b.literal(2000)))
+          .scan("DEPT")
+          .join(b.call(SqlStdOperatorTable.EQUALS,
+              b.field(2, 0, "DEPTNO"),
+              b.field(2, 1, "DEPTNO")))
+          .aggregate(
+              b.groupKey("DNAME"),
+              b.avg(false, "AVG_HIGH_SAL", b.field("SAL")));
+
+      return b.combine(2).build();
+    };
+
+    relFn(relFn)
+        .withVolcanoPlanner(false, planner -> {
+          RelOptUtil.registerDefaultRules(planner, false, false);
+          planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
+        })
+        .check();
+  }
+
+  @Test void testSharedSubqueryPattern() {
+    // Pattern that mimics: SELECT ... WHERE X IN (SELECT ... FROM shared_base)
+    final Function<RelBuilder, RelNode> relFn = b -> {
+      // Shared subquery base: Departments with high total salary
+      // Query 1: Employees in high-salary departments
+      b.scan("EMP")
+          .scan("DEPT")
+          .join(b.call(SqlStdOperatorTable.EQUALS,
+              b.field(2, 0, "DEPTNO"),
+              b.field(2, 1, "DEPTNO")))
+          .project(
+              b.field("EMPNO"),
+              b.field("ENAME"),
+              b.field("DNAME"));
+
+      // Query 2: Department stats for high-salary departments
       b.scan("DEPT")
-          .filter(b.call(SqlStdOperatorTable.EQUALS,
-                         b.field("LOC"),
-                         b.literal("DALLAS")));
+          .project(
+              b.field("DEPTNO"),
+              b.field("DNAME"),
+              b.field("LOC"));
 
-      // Combine queries from different tables
-      return b.combine(2).build();
-    };
-
-    relFn(relFn)
-        .withRule(CombineSharedComponentsRule.Config.DEFAULT.toRule())
-        .checkUnchanged();
-  }
-
-  @Test void testCombineWithSort() {
-    // Independent queries with different sort orders
-    final Function<RelBuilder, RelNode> relFn = b -> {
-      // Query 1: SELECT * FROM EMP ORDER BY SAL DESC
-      b.scan("EMP")
-          .sort(b.desc(b.field("SAL")));
-
-      // Query 2: SELECT DEPTNO, COUNT(*) as CNT FROM EMP GROUP BY DEPTNO ORDER BY CNT
-      b.scan("EMP")
-          .aggregate(b.groupKey("DEPTNO"),
-                    b.count(false, "CNT"))
-          .sort(b.field("CNT"));
-
-      // Combine the sorted queries
-      return b.combine(2).build();
-    };
-
-    relFn(relFn)
-        .withRule(CombineSharedComponentsRule.Config.DEFAULT.toRule())
-        .check();
-  }
-
-  @Test void testSingleQueryNoCombine() {
-    // Single query should not need a Combine
-    final Function<RelBuilder, RelNode> relFn = b ->
-        b.scan("EMP")
-         .filter(b.call(SqlStdOperatorTable.GREATER_THAN,
-                        b.field("SAL"),
-                        b.literal(1000)))
-         .build();
-
-    relFn(relFn)
-        .withRule(CombineSharedComponentsRule.Config.DEFAULT.toRule())
-        .checkUnchanged();
-  }
-
-  @Test void testCombineAllOnStack() {
-    // Test using combine() without specifying count - combines all on stack
-    final Function<RelBuilder, RelNode> relFn = b -> {
-      // Push multiple queries onto stack
-      b.scan("EMP");
-      b.scan("DEPT");
-      b.scan("EMP").filter(b.call(SqlStdOperatorTable.IS_NOT_NULL, b.field("MGR")));
-
-      // Combine all queries on stack (3 in this case)
-      return b.combine().build();
-    };
-
-    relFn(relFn)
-        .withRule(CombineSharedComponentsRule.Config.DEFAULT.toRule())
-        .check();
-  }
-
-  @Test void testCombineWithSharedFilteredBase() {
-    // Two queries that share a common filtered base, then apply different projections
-    final Function<RelBuilder, RelNode> relFn = b -> {
-      // Create the shared base: EMP WHERE SAL > 1000
-      RelNode sharedBase = b.scan("EMP")
-          .filter(b.call(SqlStdOperatorTable.GREATER_THAN,
-                         b.field("SAL"),
-                         b.literal(1000)))
-          .build();
-
-      // Query 1: SELECT EMPNO, SAL FROM (shared base)
-      b.push(sharedBase)
-          .project(b.field("EMPNO"), b.field("SAL"));
-
-      // Query 2: SELECT ENAME, DEPTNO FROM (shared base)
-      b.push(sharedBase)
-          .project(b.field("ENAME"), b.field("DEPTNO"));
-
-      // Combine the two queries with shared filtered base
       return b.combine(2).build();
     };
 
     relFn(relFn)
         .withVolcanoPlanner(false, planner -> {
-          // Register enumerable conversion rules (needed for VolcanoPlanner)
           RelOptUtil.registerDefaultRules(planner, false, false);
           planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
-        }).vis();
-//        .check();  // Rule doesn't find shared subtrees in this pattern
+        })
+        .check();
   }
 
-  @Test void testCombineWithSharedFilteredBaseSQL() {
-    // Two queries that share a common filtered base, then apply different projections
+  // ========== SQL-based Tests ==========
+
+  @Test void testSharedJoinSQL() {
     String sql = "MULTI("
-        + "(SELECT EMPNO, SAL FROM (SELECT * FROM EMP WHERE SAL > 1000)), "
-        + "(SELECT ENAME, DEPTNO FROM (SELECT * FROM EMP WHERE SAL > 1000))"
-    + ")";
+        + "(SELECT E.EMPNO, D.DNAME FROM EMP E JOIN DEPT D ON E.DEPTNO = D.DEPTNO WHERE E.SAL > 2000), "
+        + "(SELECT E.ENAME, D.LOC FROM EMP E JOIN DEPT D ON E.DEPTNO = D.DEPTNO WHERE D.LOC = 'CHICAGO')"
+        + ")";
 
     sql(sql)
         .withVolcanoPlanner(false, planner -> {
-          // Register enumerable conversion rules (needed for VolcanoPlanner)
           RelOptUtil.registerDefaultRules(planner, false, false);
           planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
-          System.out.println(planner);
-        }).vis();
-//        .check();  // Rule doesn't find shared subtrees in this pattern
+        })
+        .check();
+  }
+
+  @Test void testSharedFilterSQL() {
+    String sql = "MULTI("
+        + "(SELECT EMPNO, SAL FROM EMP WHERE SAL > 2000 AND DEPTNO = 10), "
+        + "(SELECT ENAME, JOB FROM EMP WHERE SAL > 2000 AND DEPTNO = 10)"
+        + ")";
+
+    sql(sql)
+        .withVolcanoPlanner(false, planner -> {
+          RelOptUtil.registerDefaultRules(planner, false, false);
+          planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
+        })
+        .check();
+  }
+
+  @Test void testSharedAggregationSQL() {
+    String sql = "MULTI("
+        + "(SELECT DEPTNO, SUM(SAL) as TOTAL, COUNT(*) as CNT FROM EMP GROUP BY DEPTNO), "
+        + "(SELECT DEPTNO, AVG(SAL) as AVG_SAL FROM EMP GROUP BY DEPTNO)"
+        + ")";
+
+    sql(sql)
+        .withVolcanoPlanner(false, planner -> {
+          RelOptUtil.registerDefaultRules(planner, false, false);
+          planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
+        })
+        .check();
+  }
+
+  @Test void testComplexSharedPatternSQL() {
+    // Filter -> Join -> Aggregate pattern
+    String sql = "MULTI("
+        + "(SELECT D.DNAME, COUNT(*) as CNT "
+        + " FROM EMP E JOIN DEPT D ON E.DEPTNO = D.DEPTNO "
+        + " WHERE E.SAL > 2000 GROUP BY D.DNAME), "
+        + "(SELECT D.DNAME, AVG(E.SAL) as AVG_SAL "
+        + " FROM EMP E JOIN DEPT D ON E.DEPTNO = D.DEPTNO "
+        + " WHERE E.SAL > 2000 GROUP BY D.DNAME)"
+        + ")";
+
+    sql(sql)
+        .withVolcanoPlanner(false, planner -> {
+          RelOptUtil.registerDefaultRules(planner, false, false);
+          planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
+        })
+        .check();
   }
 }

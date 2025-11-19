@@ -45,7 +45,6 @@ public class RelCommonExpressionBasicSuggester implements RelCommonExpressionSug
         .addRuleInstance(CommonRelSubExprRegisterRule.Config.AGGREGATE.toRule())
         .addRuleInstance(CommonRelSubExprRegisterRule.Config.FILTER.toRule())
         .addRuleInstance(CommonRelSubExprRegisterRule.Config.PROJECT.toRule())
-//        .addRuleInstance(CommonRelSubExprRegisterRule.Config.SCAN.toRule())
         .build();
     HepPlanner planner = new HepPlanner(ruleProgram, Contexts.of(localRegistry));
     planner.setRoot(input);

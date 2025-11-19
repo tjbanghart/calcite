@@ -188,6 +188,28 @@ class CoreQuidemTest extends QuidemTest {
               .with(CalciteAssert.SchemaSpec.STEELWHEELS)
               .with(Lex.BIG_QUERY)
               .connect();
+        case "tpch":
+          final String tpchModel = "{\n"
+              + "  version: '1.0',\n"
+              + "  defaultSchema: 'TPCH',\n"
+              + "  schemas: [\n"
+              + "    {\n"
+              + "      type: 'custom',\n"
+              + "      name: 'TPCH',\n"
+              + "      factory: 'org.apache.calcite.adapter.tpch.TpchSchemaFactory',\n"
+              + "      operand: {\n"
+              + "        columnPrefix: false,\n"
+              + "        scale: 0.01\n"
+              + "      }\n"
+              + "    }\n"
+              + "  ]\n"
+              + "}";
+          return CalciteAssert.that()
+              .with(CalciteConnectionProperty.PARSER_FACTORY,
+                  ExtensionDdlExecutor.class.getName() + "#PARSER_FACTORY")
+              .with(CalciteConnectionProperty.FUN, SqlLibrary.CALCITE.fun)
+              .withModel(tpchModel)
+              .connect();
         default:
           return super.connect(name, reference);
         }

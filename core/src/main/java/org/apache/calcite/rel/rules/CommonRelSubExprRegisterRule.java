@@ -80,6 +80,14 @@ public final class CommonRelSubExprRegisterRule extends CommonRelSubExprRule {
   /** Rule configuration. */
   @Value.Immutable
   public interface Config extends CommonRelSubExprRule.Config {
+    Config COMBINE = ImmutableCommonRelSubExprRegisterRule.Config.builder()
+        .withOperandSupplier(o -> o.operand(org.apache.calcite.rel.core.Combine.class).anyInputs())
+        .build();
+
+    Config SCAN = ImmutableCommonRelSubExprRegisterRule.Config.builder()
+        .withOperandSupplier(o -> o.operand(org.apache.calcite.rel.core.TableScan.class).anyInputs())
+        .build();
+
     Config JOIN = ImmutableCommonRelSubExprRegisterRule.Config.builder()
         .withOperandSupplier(o -> o.operand(Join.class)
             .predicate(j -> JoinRelType.INNER == j.getJoinType()).anyInputs())
@@ -92,7 +100,8 @@ public final class CommonRelSubExprRegisterRule extends CommonRelSubExprRule {
 
     Config PROJECT = ImmutableCommonRelSubExprRegisterRule.Config.builder()
         .withOperandSupplier(o -> o.operand(Project.class)
-            .predicate(new InterestingRelNodePredicate()).anyInputs())
+            .predicate(new InterestingRelNodePredicate())
+            .anyInputs())
         .build();
 
     @Override default CommonRelSubExprRegisterRule toRule() {

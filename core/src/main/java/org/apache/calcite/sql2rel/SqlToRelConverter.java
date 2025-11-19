@@ -88,6 +88,7 @@ import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.rex.RexPatternFieldRef;
 import org.apache.calcite.rex.RexRangeRef;
 import org.apache.calcite.rex.RexShuttle;
+import org.apache.calcite.rex.RexSimplify;
 import org.apache.calcite.rex.RexSubQuery;
 import org.apache.calcite.rex.RexUtil;
 import org.apache.calcite.rex.RexWindowBound;
@@ -217,6 +218,7 @@ import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
+import java.util.stream.Collectors;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -1112,6 +1114,16 @@ public class SqlToRelConverter {
     return e;
   }
 
+  private RexNode simplifyPredicate(RexNode predicate) {
+    final RexNode converted =
+        RexUtil.removeNullabilityCast(typeFactory, predicate);
+    List<RexNode> conjuncts = RelOptUtil.conjunctions(converted);
+    List<RexNode> simplified = conjuncts.stream()
+        .map(e -> RexSimplify.simplifyComparisonWithNull(e, rexBuilder))
+        .collect(Collectors.toList());
+    return RexUtil.composeConjunction(rexBuilder, simplified);
+  }
+
   /**
    * Converts a WHERE clause.
    *
@@ -1127,8 +1139,7 @@ public class SqlToRelConverter {
     SqlNode newWhere = pushDownNotForIn(bb.scope, where);
     replaceSubQueries(bb, newWhere, RelOptUtil.Logic.UNKNOWN_AS_FALSE);
     final RexNode convertedWhere = bb.convertExpression(newWhere);
-    final RexNode convertedWhere2 =
-        RexUtil.removeNullabilityCast(typeFactory, convertedWhere);
+    final RexNode convertedWhere2 = simplifyPredicate(convertedWhere);
 
     // only allocate filter if the condition is not TRUE
     if (convertedWhere2.isAlwaysTrue()) {
@@ -2508,6 +2519,15 @@ public class SqlToRelConverter {
       convertCollectionTable(bb, call2);
       return;
 
+    case LATERAL:
+      call = (SqlCall) from;
+
+      // Extract and analyze lateral part of join call.
+      assert call.getOperandList().size() == 1;
+      final SqlCall callLateral = call.operand(0);
+      convertFrom(bb, callLateral, fieldNames);
+      return;
+
     default:
       throw new AssertionError("not a join operator " + from);
     }
@@ -3275,7 +3295,7 @@ public class SqlToRelConverter {
     final RelNode tempRightRel = requireNonNull(rightBlackboard.root, "rightBlackboard.root");
 
     final JoinConditionType conditionType = join.getConditionType();
-    final RexNode condition;
+    RexNode condition;
     RelNode rightRel;
     if (join.isNatural()) {
       condition =
@@ -3306,6 +3326,8 @@ public class SqlToRelConverter {
         throw Util.unexpected(conditionType);
       }
     }
+    condition = simplifyPredicate(condition);
+
     final RelNode joinRel;
     if (joinType == JoinType.ASOF || joinType == JoinType.LEFT_ASOF) {
       SqlNode sqlMatchCondition =
@@ -3314,6 +3336,7 @@ public class SqlToRelConverter {
       Pair<RexNode, RelNode> conditionAndRightNode =
           convertOnCondition(fromBlackboard, sqlMatchCondition, leftRel, tempRightRel);
       RexNode matchCondition = conditionAndRightNode.left;
+      matchCondition = simplifyPredicate(matchCondition);
       rightRel = conditionAndRightNode.right;
       joinRel =
           createAsofJoin(join.getParserPosition(), fromBlackboard,
@@ -3937,6 +3960,8 @@ public class SqlToRelConverter {
       return convertWith((SqlWith) query, top);
     case VALUES:
       return RelRoot.of(convertValues((SqlCall) query, targetRowType), kind);
+    case MULTI:
+      return RelRoot.of(convertMulti((SqlCall) query), kind);
     default:
       throw new AssertionError("not a query: " + query);
     }
@@ -4894,6 +4919,32 @@ public class SqlToRelConverter {
    */
   public RelRoot convertWith(SqlWith with, boolean top) {
     return convertQuery(with.body, false, top);
+  }
+
+  /**
+   * Converts a MULTI expression into a Combine relational expression.
+   *
+   * <p>Example:
+   * <blockquote><pre>{@code
+   * MULTI((SELECT * FROM users), (SELECT id FROM users))
+   * }</pre></blockquote>
+   *
+   * @param multiCall Call to SQL MULTI operator
+   * @return Combine RelNode with each query as an input
+   */
+  public RelNode convertMulti(SqlCall multiCall) {
+    // Convert each operand (each query) to a RelNode
+    final List<RelNode> inputs = new ArrayList<>();
+    for (SqlNode operand : multiCall.getOperandList()) {
+      // Each operand is a query - convert it recursively
+      RelRoot root = convertQueryRecursive(operand, false, null);
+      inputs.add(root.rel);
+    }
+
+    // Create a Combine node with all the converted queries
+    return relBuilder
+        .combine(inputs)
+        .build();
   }
 
   /**

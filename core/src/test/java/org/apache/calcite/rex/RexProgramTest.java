@@ -24,6 +24,7 @@ import org.apache.calcite.rel.metadata.NullSentinel;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.rel.type.RelDataTypeImpl;
+import org.apache.calcite.runtime.CalciteException;
 import org.apache.calcite.sql.SqlBasicFunction;
 import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.sql.SqlOperator;
@@ -74,6 +75,7 @@ import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.CoreMatchers.nullValue;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.hasToString;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -521,10 +523,10 @@ class RexProgramTest extends RexProgramTestBase {
     try {
       final RexNode node = coalesce(vVarchar(1), vInt(2));
       fail("expected exception, got " + node);
-    } catch (IllegalArgumentException e) {
+    } catch (CalciteException e) {
       final String expected = "Cannot infer return type for COALESCE;"
           + " operand types: [VARCHAR, INTEGER]";
-      assertThat(e.getMessage(), is(expected));
+      assertThat(e.getMessage(), containsString(expected));
     }
   }
 
@@ -4243,5 +4245,19 @@ class RexProgramTest extends RexProgramTestBase {
         typeFactory.createTypeWithNullability(typeFactory.createSqlType(SqlTypeName.DATE), true);
     RexNode cast = rexBuilder.makeCast(nullableDateType, dateStr);
     checkSimplify(cast, "2020-10-30");
+  }
+
+  /** Unit test for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-7215">[CALCITE-7215]
+   * RexSimplify should simplify SEARCH with complex operand</a>. */
+  @Test void testSimplifySearch() {
+    final RexNode ref = input(tInt(), 0);
+    RexNode operand =
+        div(ref, case_(case_(eq(ref, literal(1)), trueLiteral, trueLiteral), literal(5), nullInt));
+
+    // SEARCH(/($0, CASE(CASE(=($0, 1), true, true), 5, null:INTEGER)), Sarg[1, 2, 3])
+    RexNode search = in(operand, literal(1), literal(2), literal(3));
+
+    checkSimplify(search, "SEARCH(/($0, 5), Sarg[1, 2, 3])");
   }
 }

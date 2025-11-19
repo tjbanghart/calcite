@@ -43,6 +43,7 @@ import org.apache.calcite.sql.SqlSpecialOperator;
 import org.apache.calcite.sql.fun.SqlCase;
 import org.apache.calcite.sql.fun.SqlLibrary;
 import org.apache.calcite.sql.fun.SqlLibraryOperatorTableFactory;
+import org.apache.calcite.sql.fun.SqlLibraryOperators;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.sql.parser.SqlParseException;
 import org.apache.calcite.sql.parser.SqlParser;
@@ -3493,6 +3494,14 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
     sql(query3).type(type);
   }
 
+  /** Test case for <a href="https://issues.apache.org/jira/browse/CALCITE-7230">[CALCITE-7230]
+   * Compiler rejects comparisons between NULL and a ROW value</a>. */
+  @Test void coalesceRowNull() {
+    sql("SELECT COALESCE(NULL, ROW(1))")
+        .withValidatorConfig(c -> c.withCallRewrite(false))
+        .type("RecordType(RecordType(INTEGER EXPR$0) NOT NULL EXPR$0) NOT NULL");
+  }
+
   @Test void testAsOfJoin() {
     final String type0 = "RecordType(INTEGER NOT NULL EMPNO, INTEGER NOT NULL DEPTNO) NOT NULL";
     final String sql0 = "select emp.empno, dept.deptno from emp asof join dept\n"
@@ -3595,6 +3604,23 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
         + "match_condition T0.b0 < T1.b0\n"
         + "on ^T0.b1 = CAST(T1.b1 + 1 AS BOOLEAN)^")
         .fails("ASOF JOIN condition must be a conjunction of equality comparisons");
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-7189">[CALCITE-7189]
+   * Support MySQL-style non-standard GROUP BY</a>. */
+  @Test void testNonStrictGroupByAnyValue() {
+    sql("select deptno, ename from emp group by deptno")
+        .withConformance(SqlConformanceEnum.BABEL)
+        .ok();
+    sql("select deptno, ename, job from emp group by deptno")
+        .withConformance(SqlConformanceEnum.BABEL)
+        .ok();
+    sql("select deptno, max(sal) from emp group by deptno")
+        .withConformance(SqlConformanceEnum.BABEL)
+        .ok();
+    sql("select deptno, ^ename^ from emp group by deptno")
+        .fails("Expression 'ENAME' is not being grouped");
   }
 
   @Test void testInvalidWindowFunctionWithGroupBy() {
@@ -5752,6 +5778,12 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
         .fails("Cannot specify NATURAL keyword with ON or USING clause");
   }
 
+  /** Test case for <a href="https://issues.apache.org/jira/browse/CALCITE-7225">[CALCITE-7225]
+   * Comparing ROW values with different lengths causes an IndexOutOfBoudsException</a>. */
+  @Test void testUnequalRows() {
+    sql("select ROW(1) = ROW^(1, 2)^").fails("Unequal number of entries in ROW expressions");
+  }
+
   @Test void testNaturalJoinCaseSensitive() {
     // With case-insensitive match, more columns are recognized as join columns
     // and therefore "*" expands to fewer columns.
@@ -5769,6 +5801,15 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
         .type(type0)
         .withCaseSensitive(false)
         .type(type1);
+  }
+
+  /** Test case for <a href="https://issues.apache.org/jira/browse/CALCITE-7216">[CALCITE-7216]
+   * SqlOperator.inferReturnType throws the wrong exception on error</a>. */
+  @Test void testWrongException() {
+    sql("select ^least(DATE '2020-01-01', 'x')^")
+        .withConformance(SqlConformanceEnum.BIG_QUERY)
+        .withOperatorTable(operatorTableFor(SqlLibrary.BIG_QUERY))
+        .fails("Cannot infer return type for LEAST; operand types: \\[DATE, CHAR\\(1\\)\\]");
   }
 
   @Test void testNaturalJoinIncompatibleDatatype() {
@@ -7831,6 +7872,21 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
             + "'\\(`X`, `Y`\\) -> `X` \\+ 1 \\+ `DEPTNO`'");
   }
 
+  /** Test case for <a href="https://issues.apache.org/jira/browse/CALCITE-7193">[CALCITE-7193]
+   * In an aggregation validator treats lambda variable names as column names</a>. */
+  @Test void testGroupByLambda() {
+    SqlOperatorTable chain =
+        SqlOperatorTables.chain(
+            SqlOperatorTables.of(
+                SqlLibraryOperators.ARRAY_AGG,
+                SqlLibraryOperators.EXISTS),
+            SqlStdOperatorTable.instance());
+    final String sql = "SELECT \"EXISTS\"(ARRAY_AGG(empno), x -> x > 1) FROM emp GROUP BY deptno";
+    sql(sql)
+        .withOperatorTable(chain)
+        .ok();
+  }
+
   @Test void testPercentileFunctionsBigQuery() {
     final SqlOperatorTable opTable = operatorTableFor(SqlLibrary.BIG_QUERY);
     final String sql = "select\n"
@@ -9065,6 +9121,57 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
         .fails("Duplicate relation name 'EMP' in FROM clause");
   }
 
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-7217">[CALCITE-7217]
+   * LATERAL is lost after validation</a>. */
+  @Test void testCollectionTableWithLateralRewrite() {
+    sql("select * from emp, lateral table(ramp(emp.deptno)), dept")
+        .rewritesTo("SELECT *\n"
+            + "FROM `EMP`,\n"
+            + "LATERAL TABLE(RAMP(`EMP`.`DEPTNO`)),\n"
+            + "`DEPT`");
+    // As above, with alias
+    sql("select * from emp, lateral table(ramp(emp.deptno)) as t(a), dept")
+        .rewritesTo("SELECT *\n"
+            +  "FROM `EMP`,\n"
+            +  "LATERAL TABLE(RAMP(`EMP`.`DEPTNO`)) AS `T` (`A`),\n"
+            +  "`DEPT`");
+    sql("select *\n"
+        + "from dept,\n"
+        + "  lateral table(ramp(deptno))\n"
+        + "  cross join (values ('A'), ('B'))")
+        .rewritesTo("SELECT *\n"
+            +  "FROM `DEPT`,\n"
+            +  "LATERAL TABLE(RAMP(`DEPTNO`))\n"
+            +  "CROSS JOIN (VALUES ROW('A'),\n"
+            +  "ROW('B'))");
+    // As above, using NATURAL JOIN
+    sql("select *\n"
+        + "from dept,\n"
+        + "  lateral table(ramp(deptno))\n"
+        + "  natural join emp")
+        .rewritesTo("SELECT *\n"
+            +  "FROM `DEPT`,\n"
+            +  "LATERAL TABLE(RAMP(`DEPTNO`))\n"
+            +  "NATURAL INNER JOIN `EMP`");
+    // As above, using comma
+    sql("select *\n"
+        + "from emp,\n"
+        + "  lateral (select * from dept where dept.deptno = emp.deptno),\n"
+        + "  emp as e2")
+        .rewritesTo("SELECT *\n"
+            +  "FROM `EMP`,\n"
+            +  "LATERAL (SELECT *\n"
+            +  "FROM `DEPT`\n"
+            +  "WHERE `DEPT`.`DEPTNO` = `EMP`.`DEPTNO`),\n"
+            +  "`EMP` AS `E2`");
+    // LATERAL in left part of join
+    sql("select * from lateral table(ramp(1234)), emp")
+        .rewritesTo("SELECT *\n"
+            +  "FROM LATERAL TABLE(RAMP(1234)),\n"
+            +  "`EMP`");
+  }
+
   @Test void testCollectionTableWithCursorParam() {
     sql("select * from table(dedup(cursor(select * from emp),'ename'))")
         .type("RecordType(VARCHAR(1024) NOT NULL NAME) NOT NULL");
@@ -9451,6 +9558,12 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
         .rewritesTo(expected1)
         .withValidatorIdentifierExpansion(false)
         .rewritesTo(expected2);
+
+    // Test case for [CALCITE-7195] COALESCE type inference rejects legal arguments
+    final String sql2 = "select coalesce(NULL, ARRAY[1])";
+    sql(sql2)
+        .withValidatorCallRewrite(false)
+        .ok();
   }
 
   @Test void testCoalesceWithRewrite() {
@@ -10023,6 +10136,8 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
         + "/INT left\n"
         + "/INT left\n" // checked
         + "|| left\n"
+        + "\n"
+        + "& left\n"
         + "\n"
         + "+ left\n"
         + "+ left\n" // checked

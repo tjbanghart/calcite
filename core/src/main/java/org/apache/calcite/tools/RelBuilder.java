@@ -36,6 +36,7 @@ import org.apache.calcite.rel.RelFieldCollation;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.Aggregate;
 import org.apache.calcite.rel.core.AggregateCall;
+import org.apache.calcite.rel.core.Combine;
 import org.apache.calcite.rel.core.Correlate;
 import org.apache.calcite.rel.core.CorrelationId;
 import org.apache.calcite.rel.core.Filter;
@@ -253,6 +254,14 @@ public class RelBuilder {
         (cluster, relOptSchema, rootSchema, statement) ->
             new RelBuilder(config.getContext(), cluster, relOptSchema));
   }
+
+  /** Creates a RelBuilder. */
+  public static RelBuilder create(FrameworkConfig config, RelOptCluster existingCluster) {
+    return Frameworks.withPrepare(config,
+        (cluster, relOptSchema, rootSchema, statement) ->
+            new RelBuilder(config.getContext(), existingCluster, relOptSchema));
+  }
+
 
   /** Creates a copy of this RelBuilder, with the same state as this, applying
    * a transform to the config. */
@@ -1185,8 +1194,8 @@ public class RelBuilder {
     return cast(SqlParserPos.ZERO, expr, typeName, precision);
   }
 
-    /** Creates an expression that casts an expression to a type with a given name
-     * and precision or length. */
+  /** Creates an expression that casts an expression to a type with a given name
+   * and precision or length. */
   public RexNode cast(SqlParserPos pos, RexNode expr, SqlTypeName typeName, int precision) {
     final RelDataType type =
         cluster.getTypeFactory().createSqlType(typeName, precision);
@@ -2360,11 +2369,11 @@ public class RelBuilder {
     stack.push(
         new Frame(
           new Uncollect(
-            cluster,
-            cluster.traitSetOf(Convention.NONE),
-            frame.rel,
-            withOrdinality,
-            requireNonNull(itemAliases, "itemAliases"))));
+              cluster,
+              cluster.traitSetOf(Convention.NONE),
+              frame.rel,
+              withOrdinality,
+              requireNonNull(itemAliases, "itemAliases"))));
     return this;
   }
 
@@ -2840,8 +2849,7 @@ public class RelBuilder {
     for (Multiset.Entry<ImmutableBitSet> entry : groupSets.entrySet()) {
       int groupId = entry.getCount() - 1;
       for (int i = 0; i <= groupId; i++) {
-        groupIdToGroupSets.computeIfAbsent(i,
-            k -> Sets.newTreeSet(ImmutableBitSet.COMPARATOR))
+        groupIdToGroupSets.computeIfAbsent(i, k -> Sets.newTreeSet(ImmutableBitSet.COMPARATOR))
             .add(entry.getElement());
       }
     }
@@ -3727,8 +3735,14 @@ public class RelBuilder {
   /** Creates a {@link Sort} by specifying collations.
    */
   public RelBuilder sort(RelCollation collation) {
+    return sortLimit(null, null, collation);
+  }
+
+  /** Creates a {@link Sort} by specifying collations, with offset node and fetch node. */
+  public RelBuilder sortLimit(@Nullable RexNode offsetNode, @Nullable RexNode fetchNode,
+      RelCollation collation) {
     final RelNode sort =
-        struct.sortFactory.createSort(peek(), collation, null, null);
+        struct.sortFactory.createSort(peek(), collation, offsetNode, fetchNode);
     replaceTop(sort);
     return this;
   }
@@ -3739,10 +3753,16 @@ public class RelBuilder {
    * @param fetch Maximum number of rows to fetch; negative means no limit
    * @param nodes Sort expressions
    */
-  public RelBuilder sortLimit(long offset, long fetch,
+  public RelBuilder sortLimit(Number offset, Number fetch,
       Iterable<? extends RexNode> nodes) {
-    final @Nullable RexNode offsetNode = offset <= 0 ? null : literal(offset);
-    final @Nullable RexNode fetchNode = fetch < 0 ? null : literal(fetch);
+    final @Nullable RexNode offsetNode =
+        new BigDecimal(offset.toString()).compareTo(BigDecimal.ZERO) <= 0
+            ? null
+            : literal(offset);
+    final @Nullable RexNode fetchNode =
+        new BigDecimal(fetch.toString()).compareTo(BigDecimal.ZERO) < 0
+            ? null
+            : literal(fetch);
     return sortLimit(offsetNode, fetchNode, nodes);
   }
 
@@ -3770,9 +3790,12 @@ public class RelBuilder {
     final Registrar registrar = new Registrar(fields(), ImmutableList.of());
     final List<RelFieldCollation> fieldCollations =
         registrar.registerFieldCollations(nodes);
-    final long fetch = fetchNode instanceof RexLiteral
-        ? RexLiteral.longValue(fetchNode) : -1;
-    if (offsetNode == null && fetch == 0 && config.simplifyLimit()) {
+    final Number fetch = fetchNode instanceof RexLiteral
+        ? RexLiteral.numberValue(fetchNode) : null;
+    if (offsetNode == null
+        && fetch != null
+        && ((BigDecimal) fetch).compareTo(BigDecimal.ZERO) == 0
+        && config.simplifyLimit()) {
       return empty();
     }
     if (offsetNode == null && fetchNode == null && fieldCollations.isEmpty()) {
@@ -5382,5 +5405,30 @@ public class RelBuilder {
   private interface RegisterAgg {
     RexInputRef registerAgg(SqlAggFunction op, List<RexNode> operands,
         RelDataType type, @Nullable String name);
+  }
+
+  /** Creates a {@link Combine} of the top {@code n} relational expressions
+   * on the stack. */
+  public RelBuilder combine(int n) {
+    final List<RelNode> inputs = new ArrayList<>();
+    for (int i = 0; i < n; i++) {
+      inputs.add(0, peek(i));
+    }
+    return push(struct.combineFactory.createCombine(inputs));
+  }
+
+  /** Creates a {@link Combine} of all relational expressions on the stack. */
+  public RelBuilder combine() {
+    return combine(size());
+  }
+
+  /** Creates a {@link Combine} of the given relational expressions. */
+  public RelBuilder combine(RelNode... inputs) {
+    return push(struct.combineFactory.createCombine(Arrays.asList(inputs)));
+  }
+
+  /** Creates a {@link Combine} of the given relational expressions. */
+  public RelBuilder combine(Iterable<? extends RelNode> inputs) {
+    return push(struct.combineFactory.createCombine(ImmutableList.copyOf(inputs)));
   }
 }

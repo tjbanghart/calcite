@@ -17,6 +17,7 @@
 package org.apache.calcite.sql.fun;
 
 import org.apache.calcite.avatica.util.TimeUnit;
+import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.sql.SqlAggFunction;
 import org.apache.calcite.sql.SqlAsOperator;
 import org.apache.calcite.sql.SqlBasicCall;
@@ -55,6 +56,7 @@ import org.apache.calcite.sql.SqlTumbleTableFunction;
 import org.apache.calcite.sql.SqlUnnestOperator;
 import org.apache.calcite.sql.SqlUtil;
 import org.apache.calcite.sql.SqlValuesOperator;
+import org.apache.calcite.sql.SqlMultiOperator;
 import org.apache.calcite.sql.SqlWindow;
 import org.apache.calcite.sql.SqlWithinDistinctOperator;
 import org.apache.calcite.sql.SqlWithinGroupOperator;
@@ -86,6 +88,7 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import static org.apache.calcite.linq4j.Nullness.castNonNull;
+import static org.apache.calcite.util.Static.RESOURCE;
 
 import static java.util.Objects.requireNonNull;
 
@@ -273,9 +276,14 @@ public class SqlStdOperatorTable extends ReflectiveSqlOperatorTable {
                 typeToTransform.getSqlTypeName().getFamily() == SqlTypeFamily.ARRAY
                     ? ReturnTypes.LEAST_RESTRICTIVE
                     : ReturnTypes.DYADIC_STRING_SUM_PRECISION_NULLABLE;
-
-            return requireNonNull(returnType.inferReturnType(opBinding),
-                "inferred CONCAT element type");
+            RelDataType type = returnType.inferReturnType(opBinding);
+            if (type == null) {
+              throw opBinding.newError(
+                  RESOURCE.cannotInferReturnType(
+                      opBinding.getOperator().toString(),
+                      opBinding.collectOperandTypes().toString()));
+            }
+            return type;
           }),
           null,
           OperandTypes.STRING_SAME_SAME_OR_ARRAY_SAME_SAME);
@@ -1312,6 +1320,23 @@ public class SqlStdOperatorTable extends ReflectiveSqlOperatorTable {
           InferTypes.FIRST_KNOWN,
           OperandTypes.INTEGER_INTEGER.or(OperandTypes.BINARY_BINARY)
               .or(OperandTypes.UNSIGNED_NUMERIC_UNSIGNED_NUMERIC));
+  // Both operands should support bitwise operations
+
+  /**
+   * <code>{@code &}</code> operator.
+   */
+  public static final SqlBinaryOperator BITAND_OPERATOR =
+      new SqlBinaryOperator(
+          "&",
+          SqlKind.BITAND,
+          50,        // Higher precedence than XOR but lower than multiplication
+          true,
+          ReturnTypes.LEAST_RESTRICTIVE,
+          InferTypes.FIRST_KNOWN,
+          OperandTypes.INTEGER_INTEGER.or(OperandTypes.BINARY_BINARY)
+              .or(OperandTypes.UNSIGNED_NUMERIC_UNSIGNED_NUMERIC)
+              .or(OperandTypes.family(SqlTypeFamily.UNSIGNED_NUMERIC, SqlTypeFamily.INTEGER)
+                  .or(OperandTypes.family(SqlTypeFamily.INTEGER, SqlTypeFamily.UNSIGNED_NUMERIC))));
 
   /**
    * <code>BITNOT</code> scalar function.
@@ -1575,6 +1600,9 @@ public class SqlStdOperatorTable extends ReflectiveSqlOperatorTable {
 
   public static final SqlSpecialOperator VALUES =
       new SqlValuesOperator();
+
+  public static final SqlSpecialOperator MULTI =
+      new SqlMultiOperator();
 
   public static final SqlLiteralChainOperator LITERAL_CHAIN =
       new SqlLiteralChainOperator();

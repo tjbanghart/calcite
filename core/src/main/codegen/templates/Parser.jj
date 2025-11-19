@@ -810,6 +810,8 @@ SqlNode LeafQuery(ExprContext exprContext) :
 |
     e = TableConstructor() { return e; }
 |
+    e = MultiConstructor() { return e; }
+|
     e = ExplicitTable(getPos()) { return e; }
 }
 
@@ -2545,6 +2547,33 @@ SqlNode TableConstructor() :
     )*
     {
         return SqlStdOperatorTable.VALUES.createCall(s.end(this), list);
+    }
+}
+
+/**
+ * Parses a MULTI expression: MULTI((query1), (query2), ...)
+ * Each query must be wrapped in parentheses.
+ */
+SqlNode MultiConstructor() :
+{
+    final List<SqlNode> list = new ArrayList<SqlNode>();
+    final Span s;
+    SqlNode e;
+}
+{
+    <MULTI> { s = span(); }
+    <LPAREN>
+    <LPAREN> e = OrderedQueryOrExpr(ExprContext.ACCEPT_QUERY) <RPAREN>
+    { list.add(e); }
+    (
+        LOOKAHEAD(2)
+        <COMMA>
+        <LPAREN> e = OrderedQueryOrExpr(ExprContext.ACCEPT_QUERY) <RPAREN>
+        { list.add(e); }
+    )*
+    <RPAREN>
+    {
+        return SqlStdOperatorTable.MULTI.createCall(s.end(this), list);
     }
 }
 
@@ -8002,6 +8031,7 @@ SqlBinaryOperator BinaryRowOperator() :
 |   <OVERLAPS> { return SqlStdOperatorTable.OVERLAPS; }
 |   <CARET> { return SqlStdOperatorTable.BITXOR_OPERATOR; }
 |   <EQUALS> { return SqlStdOperatorTable.PERIOD_EQUALS; }
+|   <AMPERSAND> { return SqlStdOperatorTable.BITAND_OPERATOR; }
 |   <PRECEDES> { return SqlStdOperatorTable.PRECEDES; }
 |   <SUCCEEDS> { return SqlStdOperatorTable.SUCCEEDS; }
 |   LOOKAHEAD(2) <IMMEDIATELY> <PRECEDES> { return SqlStdOperatorTable.IMMEDIATELY_PRECEDES; }
@@ -8426,6 +8456,7 @@ SqlPostfixOperator PostfixRowOperator() :
 |   < MONTH: "MONTH" >
 |   < MONTHS: "MONTHS" >
 |   < MORE_: "MORE" >
+|   < MULTI: "MULTI" >
 |   < MULTISET: "MULTISET" >
 |   < MUMPS: "MUMPS" >
 |   < NAME: "NAME" >
@@ -8992,6 +9023,7 @@ void NonReservedKeyWord2of3() :
 |   < DOUBLE_QUOTE: "\"" >
 |   < VERTICAL_BAR: "|" >
 |   < CARET: "^" >
+|   < AMPERSAND: "&" >
 |   < LEFTSHIFT: "<<" >
 |   < DOLLAR: "$" >
 <#list (parser.binaryOperatorsTokens!default.parser.binaryOperatorsTokens) as operator>

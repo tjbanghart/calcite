@@ -18,10 +18,15 @@ package org.apache.calcite.rel.core;
 
 import org.apache.calcite.linq4j.function.Experimental;
 import org.apache.calcite.plan.RelOptCluster;
+import org.apache.calcite.plan.RelOptCost;
+import org.apache.calcite.plan.RelOptPlanner;
 import org.apache.calcite.plan.RelOptTable;
 import org.apache.calcite.plan.RelTraitSet;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.RelWriter;
+import org.apache.calcite.rel.metadata.RelMetadataQuery;
+
+import org.checkerframework.checker.nullness.qual.Nullable;
 
 import static java.util.Objects.requireNonNull;
 
@@ -49,5 +54,18 @@ public abstract class TableSpool extends Spool {
   @Override public RelWriter explainTerms(RelWriter pw) {
     super.explainTerms(pw);
     return pw.item("table", table.getQualifiedName());
+  }
+
+  @Override public @Nullable RelOptCost computeSelfCost(RelOptPlanner planner,
+      RelMetadataQuery mq) {
+    double rowCount = mq.getRowCount(this);
+
+    // TableSpool has minimal self-cost - the input does the real work
+    // Just charge for writing to temporary storage
+    return planner.getCostFactory().makeCost(
+        0,                    // rows: no additional row processing
+        rowCount * 0.01,      // cpu: tiny management overhead
+        rowCount * 0.05       // io: writing to temp (cheap sequential write)
+    );
   }
 }

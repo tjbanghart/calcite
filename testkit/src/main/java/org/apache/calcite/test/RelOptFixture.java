@@ -26,6 +26,7 @@ import org.apache.calcite.plan.RelOptUtil;
 import org.apache.calcite.plan.hep.HepPlanner;
 import org.apache.calcite.plan.hep.HepProgram;
 import org.apache.calcite.plan.hep.HepProgramBuilder;
+import org.apache.calcite.plan.visualizer.RuleMatchVisualizer;
 import org.apache.calcite.plan.volcano.VolcanoPlanner;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.RelFactories;
@@ -139,6 +140,14 @@ public class RelOptFixture {
     return new RelOptFixture(tester, factory, diffRepos, relSupplier,
         preProgram, planner, hooks, before, after, decorrelate,
         lateDecorrelate);
+  }
+
+  public void vis() {
+    RuleMatchVisualizer viz = new RuleMatchVisualizer("/tmp/calcite-visualizer-output/", "CombineRelOptRulesTest");
+    // Attach visualizer to see the transformations
+    viz.attachTo(this.planner);
+    this.check();
+    viz.writeToFile();
   }
 
   public RelOptFixture sql(String sql) {

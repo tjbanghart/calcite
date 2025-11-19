@@ -575,6 +575,9 @@ public enum SqlKind {
   /** {@code VALUES} relational operator. */
   VALUES,
 
+  /** {@code MULTI} relational operator. */
+  MULTI,
+
   /**
    * Explicit table, e.g. <code>select * from (TABLE t)</code> or <code>TABLE
    * t</code>. See also {@link #COLLECTION_TABLE}.
@@ -1437,7 +1440,7 @@ public enum SqlKind {
    * {@link #EXPLICIT_TABLE}.
    */
   public static final EnumSet<SqlKind> QUERY =
-      EnumSet.of(SELECT, UNION, INTERSECT, EXCEPT, VALUES, WITH, ORDER_BY,
+      EnumSet.of(SELECT, UNION, INTERSECT, EXCEPT, VALUES, MULTI, WITH, ORDER_BY,
           EXPLICIT_TABLE);
 
   /**

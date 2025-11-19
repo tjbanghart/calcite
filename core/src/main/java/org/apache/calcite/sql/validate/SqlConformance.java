@@ -131,6 +131,11 @@ public interface SqlConformance {
   SelectAliasLookup isSelectAlias();
 
   /**
+   * Allow non-GROUP BY columns in SELECT (MySQL loose mode).
+   */
+  boolean isNonStrictGroupBy();
+
+  /**
    * Whether {@code GROUP BY 2} is interpreted to mean 'group by the 2nd column
    * in the select list'.
    *
@@ -527,6 +532,7 @@ public interface SqlConformance {
    * {@link SqlConformanceEnum#ORACLE_12},
    * {@link SqlConformanceEnum#PRESTO},
    * {@link SqlConformanceEnum#SQL_SERVER_2008};
+   * {@link SqlConformanceEnum#BIG_QUERY}
    * false otherwise.
    */
   boolean shouldConvertRaggedUnionTypesToVarying();

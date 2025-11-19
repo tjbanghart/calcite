@@ -40,6 +40,7 @@ public class RelCommonExpressionBasicSuggester implements RelCommonExpressionSug
   @Override public Collection<RelNode> suggest(RelNode input, @Nullable Context context) {
     CommonRelExpressionRegistry localRegistry = new CommonRelExpressionRegistry();
     HepProgram ruleProgram = new HepProgramBuilder()
+        .addRuleInstance(CommonRelSubExprRegisterRule.Config.COMBINE.toRule())
         .addRuleInstance(CommonRelSubExprRegisterRule.Config.JOIN.toRule())
         .addRuleInstance(CommonRelSubExprRegisterRule.Config.AGGREGATE.toRule())
         .addRuleInstance(CommonRelSubExprRegisterRule.Config.FILTER.toRule())

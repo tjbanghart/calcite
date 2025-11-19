@@ -23,7 +23,10 @@ import org.apache.calcite.jdbc.CalciteConnection;
 import org.apache.calcite.plan.Contexts;
 import org.apache.calcite.plan.RelOptPlanner;
 import org.apache.calcite.plan.RelOptRule;
+import org.apache.calcite.plan.visualizer.RuleMatchVisualizer;
 import org.apache.calcite.prepare.Prepare;
+import org.apache.calcite.tools.Program;
+import org.apache.calcite.tools.Programs;
 import org.apache.calcite.rel.rules.CoreRules;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
@@ -43,6 +46,7 @@ import org.apache.calcite.tools.Frameworks;
 import org.apache.calcite.tools.Planner;
 import org.apache.calcite.util.Bug;
 import org.apache.calcite.util.Closer;
+import org.apache.calcite.util.Holder;
 import org.apache.calcite.util.Sources;
 import org.apache.calcite.util.Util;
 
@@ -136,10 +140,33 @@ public abstract class QuidemTest {
     }
   }
 
+  /** Command that enables visualization of planner rule matches. */
+  public static class VizCommand extends AbstractCommand {
+    private final ImmutableList<String> lines;
+    private final ImmutableList<String> content;
+
+    VizCommand(List<String> lines, List<String> content) {
+      this.lines = ImmutableList.copyOf(lines);
+      this.content = ImmutableList.copyOf(content);
+    }
+
+    @Override public void execute(Context x, boolean execute) throws Exception {
+      if (execute) {
+        x.echo(ImmutableList.of("Visualization enabled - output will be written to /tmp/calcite-visualizer-output/"));
+      } else {
+        x.echo(content);
+      }
+      x.echo(lines);
+    }
+  }
+
   private static final Pattern PATTERN = Pattern.compile("\\.iq$");
 
   // Saved original planner rules
   private static @Nullable List<RelOptRule> originalRules;
+
+  // Visualizer for planner rule matches
+  private static @Nullable RuleMatchVisualizer visualizer;
 
   private static @Nullable Object getEnv(String varName) {
     switch (varName) {
@@ -259,6 +286,51 @@ public abstract class QuidemTest {
                           }
                           updatePlanner(planner, (String) value);
                         }));
+              }
+            }
+            // Enable visualization of planner rule matches via "!set viz" command.
+            if (propertyName.equals("viz")) {
+              final boolean enable = value instanceof Boolean && (Boolean) value;
+              if (enable) {
+                visualizer = new RuleMatchVisualizer(
+                    "/tmp/calcite-visualizer-output/",
+                    path.replace(File.separatorChar, '_').replaceAll("\\.iq$", ""));
+                closer.add(Hook.PLANNER.addThread((Consumer<RelOptPlanner>) planner ->
+                    visualizer.attachTo(planner)));
+                closer.add(() -> {
+                  if (visualizer != null) {
+                    visualizer.writeToFile();
+                    visualizer = null;
+                  }
+                });
+              }
+            }
+            // Skip all HepPlanner programs via "!set volcanoonly true".
+            // This directly invokes VolcanoPlanner without HepPlanner preprocessing.
+            if (propertyName.equals("volcanoonly")) {
+              final boolean enable = value instanceof Boolean && (Boolean) value;
+              if (enable) {
+                closer.add(Hook.PROGRAM.addThread(
+                    (Consumer<Holder<@Nullable Program>>) holder -> {
+                      // Minimal program: just run VolcanoPlanner, no HepPlanner phases
+                      Program volcanoOnly = (planner, rel, requiredOutputTraits,
+                          materializations, lattices) -> {
+                        for (org.apache.calcite.plan.RelOptMaterialization mat : materializations) {
+                          planner.addMaterialization(mat);
+                        }
+                        for (org.apache.calcite.plan.RelOptLattice lat : lattices) {
+                          planner.addLattice(lat);
+                        }
+                        planner.setRoot(rel);
+                        final org.apache.calcite.rel.RelNode rootRel =
+                            rel.getTraitSet().equals(requiredOutputTraits)
+                                ? rel : planner.changeTraits(rel, requiredOutputTraits);
+                        planner.setRoot(rootRel);
+                        final RelOptPlanner volcanoPlanner = planner.chooseDelegate();
+                        return volcanoPlanner.findBestExp();
+                      };
+                      holder.set(volcanoOnly);
+                    }));
               }
             }
           })

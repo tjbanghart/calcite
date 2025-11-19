@@ -16,15 +16,22 @@
  */
 package org.apache.calcite.test;
 
+import org.apache.calcite.jdbc.CalciteSchema;
+import org.apache.calcite.plan.RelOptCluster;
 import org.apache.calcite.plan.RelTraitDef;
+import org.apache.calcite.plan.volcano.VolcanoPlanner;
+import org.apache.calcite.prepare.CalciteCatalogReader;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.sql.parser.SqlParser;
 import org.apache.calcite.tools.FrameworkConfig;
 import org.apache.calcite.tools.Frameworks;
 import org.apache.calcite.tools.Programs;
 import org.apache.calcite.tools.RelBuilder;
+import org.apache.calcite.tools.RelBuilderFactory;
 
+import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.function.Function;
 
 /**
@@ -128,6 +135,10 @@ interface RelSupplier {
     }
 
     @Override public RelNode apply(RelOptFixture fixture) {
+      if (fixture.planner instanceof VolcanoPlanner) {
+        RelOptCluster existingCluster = fixture.factory.createSqlToRelConverter().getCluster();
+        return relFn.apply(RelBuilder.create(FRAMEWORK_CONFIG, existingCluster));
+      }
       return relFn.apply(RelBuilder.create(FRAMEWORK_CONFIG));
     }
 

@@ -26,6 +26,7 @@ import org.apache.calcite.rel.RelFieldCollation;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.RelVisitor;
 import org.apache.calcite.rel.core.Collect;
+import org.apache.calcite.rel.core.Combine;
 import org.apache.calcite.rel.core.CorrelationId;
 import org.apache.calcite.rel.core.RelFactories;
 import org.apache.calcite.rel.core.Sample;
@@ -540,6 +541,10 @@ public class RelStructuredTypeFlattener implements ReflectiveVisitor {
     rewriteGeneric(rel);
   }
 
+  public void rewriteRel(Combine rel) {
+    rewriteGeneric(rel);
+  }
+
   public void rewriteRel(LogicalValues rel) {
     // NOTE jvs 30-Apr-2006:  UDT instances require invocation
     // of a constructor method, which can't be represented
@@ -565,7 +570,7 @@ public class RelStructuredTypeFlattener implements ReflectiveVisitor {
     RelNode newInput = getNewForOldRel(rel.getInput());
     final RelNode newRel = relBuilder.push(newInput)
         .projectNamed(flattenedExpList.leftList(), flattenedExpList.rightList(),
-            true)
+            true, rel.getVariablesSet())
         .hints(rel.getHints())
         .build();
     setNewForOldRel(rel, newRel);

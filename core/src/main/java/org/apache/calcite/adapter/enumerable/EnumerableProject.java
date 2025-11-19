@@ -16,6 +16,10 @@
  */
 package org.apache.calcite.adapter.enumerable;
 
+import org.apache.calcite.adapter.java.JavaTypeFactory;
+import org.apache.calcite.linq4j.tree.BlockBuilder;
+import org.apache.calcite.linq4j.tree.Expression;
+import org.apache.calcite.linq4j.tree.Expressions;
 import org.apache.calcite.plan.RelOptCluster;
 import org.apache.calcite.plan.RelTraitSet;
 import org.apache.calcite.rel.RelCollationTraitDef;
@@ -25,6 +29,10 @@ import org.apache.calcite.rel.metadata.RelMdCollation;
 import org.apache.calcite.rel.metadata.RelMetadataQuery;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rex.RexNode;
+import org.apache.calcite.rex.RexProgram;
+import org.apache.calcite.sql.validate.SqlConformance;
+import org.apache.calcite.sql.validate.SqlConformanceEnum;
+import org.apache.calcite.util.BuiltInMethod;
 import org.apache.calcite.util.Pair;
 import org.apache.calcite.util.Util;
 
@@ -87,8 +95,53 @@ public class EnumerableProject extends Project implements EnumerableRel {
   }
 
   @Override public Result implement(EnumerableRelImplementor implementor, Prefer pref) {
-    // EnumerableCalcRel is always better
-    throw new UnsupportedOperationException();
+    // Visit child
+    final BlockBuilder builder = new BlockBuilder();
+    final EnumerableRel child = (EnumerableRel) getInput();
+    final Result result = implementor.visitChild(this, 0, child, pref);
+    final PhysType physType =
+        PhysTypeImpl.of(
+            implementor.getTypeFactory(),
+            getRowType(),
+            pref.prefer(result.format));
+
+    // child.select(row -> new Row(projections...))
+    Expression childExp = builder.append("child", result.block);
+
+    // Generate selector: row -> outputRow
+    final BlockBuilder selectorBuilder = new BlockBuilder();
+    final org.apache.calcite.linq4j.tree.ParameterExpression row_ =
+        Expressions.parameter(result.physType.getJavaRowType(), "row");
+
+    final RexToLixTranslator.InputGetter inputGetter =
+        new RexToLixTranslator.InputGetterImpl(row_, result.physType);
+
+    final RexToLixTranslator translator =
+        RexToLixTranslator.forAggregation(
+            implementor.getTypeFactory(),
+            selectorBuilder,
+            inputGetter,
+            implementor.getConformance());
+
+    final List<Expression> translatedExps = new java.util.ArrayList<>();
+    for (RexNode exp : exps) {
+      translatedExps.add(translator.translate(exp));
+    }
+
+    selectorBuilder.add(
+        Expressions.return_(null, physType.record(translatedExps)));
+
+    final Expression selector =
+        Expressions.lambda(
+            org.apache.calcite.linq4j.function.Function1.class,
+            selectorBuilder.toBlock(),
+            row_);
+
+    builder.add(
+        Expressions.return_(null,
+            Expressions.call(childExp, BuiltInMethod.SELECT.method, selector)));
+
+    return implementor.result(physType, builder.toBlock());
   }
 
   @Override public @Nullable Pair<RelTraitSet, List<RelTraitSet>> passThroughTraits(

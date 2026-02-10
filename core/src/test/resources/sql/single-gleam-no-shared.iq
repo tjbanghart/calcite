@@ -1,0 +1,451 @@
+# single-gleam-no-shared.iq - All Gleam-style queries in a SINGLE MULTI statement WITHOUT shared components
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to you under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+!use tpch
+!set outputformat mysql
+
+# Skip all HepPlanner preprocessing (including calc conversion)
+# and go directly to VolcanoPlanner for optimization
+!set volcanoonly true
+
+# NOTE: Shared components rule is NOT enabled - should see duplicate scans in plans
+
+# ALL queries in a single MULTI statement (no sharing optimization)
+MULTI(
+-- Parts By Brand --
+(select
+  p.p_brand,
+  count(distinct p.p_partkey) as part_count
+from
+  part p,
+  partsupp ps
+where
+  p.p_partkey = ps.ps_partkey
+  and p.p_type like '%BRASS'
+group by
+  p.p_brand
+order by
+  part_count desc
+limit 10),
+
+-- Total Supply Cost by Brand --
+(select
+  p.p_brand,
+  sum(ps.ps_supplycost * ps.ps_availqty) as total_value
+from
+  part p,
+  partsupp ps
+where
+  p.p_partkey = ps.ps_partkey
+  and p.p_type like '%BRASS'
+group by
+  p.p_brand
+order by
+  total_value desc
+limit 10),
+
+-- Supplier Count by Brand --
+(select
+  p.p_brand,
+  count(distinct ps.ps_suppkey) as supplier_count
+from
+  part p,
+  partsupp ps
+where
+  p.p_partkey = ps.ps_partkey
+  and p.p_type like '%BRASS'
+group by
+  p.p_brand
+order by
+  supplier_count desc
+limit 10),
+
+-- Top Customers by Revenue --
+(select
+  c.c_name,
+  c.c_custkey,
+  sum(l.l_extendedprice * (1 - l.l_discount)) as total_revenue
+from
+  customer c,
+  orders o,
+  lineitem l
+where
+  c.c_custkey = o.o_custkey
+  and o.o_orderkey = l.l_orderkey
+  and l.l_shipdate >= date '1994-01-01'
+  and l.l_shipdate < date '1994-01-01' + interval '3' month
+group by
+  c.c_custkey,
+  c.c_name
+order by
+  total_revenue desc
+limit 20),
+
+-- Customer Order Counts --
+(select
+  c.c_name,
+  c.c_custkey,
+  count(distinct o.o_orderkey) as order_count
+from
+  customer c,
+  orders o,
+  lineitem l
+where
+  c.c_custkey = o.o_custkey
+  and o.o_orderkey = l.l_orderkey
+  and l.l_shipdate >= date '1994-01-01'
+  and l.l_shipdate < date '1994-01-01' + interval '3' month
+group by
+  c.c_custkey,
+  c.c_name
+order by
+  order_count desc
+limit 20),
+
+-- Customer Average Order Value --
+(select
+  c.c_name,
+  c.c_custkey,
+  avg(l.l_extendedprice * (1 - l.l_discount)) as avg_line_value
+from
+  customer c,
+  orders o,
+  lineitem l
+where
+  c.c_custkey = o.o_custkey
+  and o.o_orderkey = l.l_orderkey
+  and l.l_shipdate >= date '1994-01-01'
+  and l.l_shipdate < date '1994-01-01' + interval '3' month
+group by
+  c.c_custkey,
+  c.c_name
+order by
+  avg_line_value desc
+limit 20),
+
+-- Daily Revenue --
+(select
+  l_shipdate,
+  sum(l_extendedprice * (1 - l_discount)) as daily_revenue
+from
+  lineitem
+where
+  l_shipdate >= date '1994-01-01'
+  and l_shipdate < date '1994-04-01'
+group by
+  l_shipdate
+order by
+  l_shipdate
+limit 100),
+
+-- Daily Item Count --
+(select
+  l_shipdate,
+  count(*) as item_count
+from
+  lineitem
+where
+  l_shipdate >= date '1994-01-01'
+  and l_shipdate < date '1994-04-01'
+group by
+  l_shipdate
+order by
+  l_shipdate
+limit 100),
+
+-- Daily Average Discount --
+(select
+  l_shipdate,
+  avg(l_discount) as avg_discount
+from
+  lineitem
+where
+  l_shipdate >= date '1994-01-01'
+  and l_shipdate < date '1994-04-01'
+group by
+  l_shipdate
+order by
+  l_shipdate
+limit 100),
+
+-- Orders by Ship Mode --
+(select
+  l.l_shipmode,
+  count(*) as order_count,
+  sum(l.l_extendedprice) as total_value
+from
+  orders o,
+  lineitem l
+where
+  o.o_orderkey = l.l_orderkey
+  and o.o_orderdate >= date '1994-01-01'
+  and o.o_orderdate < date '1994-04-01'
+group by
+  l.l_shipmode
+order by
+  order_count desc),
+
+-- Orders by Priority --
+(select
+  o.o_orderpriority,
+  count(*) as order_count,
+  sum(l.l_extendedprice) as total_value
+from
+  orders o,
+  lineitem l
+where
+  o.o_orderkey = l.l_orderkey
+  and o.o_orderdate >= date '1994-01-01'
+  and o.o_orderdate < date '1994-04-01'
+group by
+  o.o_orderpriority
+order by
+  order_count desc),
+
+-- Average Quantity by Ship Mode --
+(select
+  l.l_shipmode,
+  avg(l.l_quantity) as avg_quantity
+from
+  orders o,
+  lineitem l
+where
+  o.o_orderkey = l.l_orderkey
+  and o.o_orderdate >= date '1994-01-01'
+  and o.o_orderdate < date '1994-04-01'
+group by
+  l.l_shipmode
+order by
+  avg_quantity desc),
+
+-- Supplier Count by Region --
+(select
+  r.r_name,
+  count(distinct s.s_suppkey) as supplier_count
+from
+  supplier s,
+  nation n,
+  region r
+where
+  s.s_nationkey = n.n_nationkey
+  and n.n_regionkey = r.r_regionkey
+group by
+  r.r_name
+order by
+  supplier_count desc),
+
+-- Supplier Account Balance by Region --
+(select
+  r.r_name,
+  sum(s.s_acctbal) as total_acctbal,
+  avg(s.s_acctbal) as avg_acctbal
+from
+  supplier s,
+  nation n,
+  region r
+where
+  s.s_nationkey = n.n_nationkey
+  and n.n_regionkey = r.r_regionkey
+group by
+  r.r_name
+order by
+  total_acctbal desc),
+
+-- Nations per Region --
+(select
+  r.r_name,
+  count(distinct n.n_nationkey) as nation_count
+from
+  supplier s,
+  nation n,
+  region r
+where
+  s.s_nationkey = n.n_nationkey
+  and n.n_regionkey = r.r_regionkey
+group by
+  r.r_name
+order by
+  nation_count desc),
+
+-- Revenue by Part Type --
+(select
+  p.p_type,
+  sum(l.l_extendedprice * (1 - l.l_discount)) as revenue
+from
+  customer c,
+  orders o,
+  lineitem l,
+  part p
+where
+  c.c_custkey = o.o_custkey
+  and o.o_orderkey = l.l_orderkey
+  and l.l_partkey = p.p_partkey
+  and o.o_orderdate >= date '1994-01-01'
+  and o.o_orderdate < date '1994-07-01'
+group by
+  p.p_type
+order by
+  revenue desc
+limit 20),
+
+-- Order Count by Part Type --
+(select
+  p.p_type,
+  count(distinct o.o_orderkey) as order_count
+from
+  customer c,
+  orders o,
+  lineitem l,
+  part p
+where
+  c.c_custkey = o.o_custkey
+  and o.o_orderkey = l.l_orderkey
+  and l.l_partkey = p.p_partkey
+  and o.o_orderdate >= date '1994-01-01'
+  and o.o_orderdate < date '1994-07-01'
+group by
+  p.p_type
+order by
+  order_count desc
+limit 20),
+
+-- Average Line Item Value by Part Type --
+(select
+  p.p_type,
+  avg(l.l_extendedprice * (1 - l.l_discount)) as avg_value
+from
+  customer c,
+  orders o,
+  lineitem l,
+  part p
+where
+  c.c_custkey = o.o_custkey
+  and o.o_orderkey = l.l_orderkey
+  and l.l_partkey = p.p_partkey
+  and o.o_orderdate >= date '1994-01-01'
+  and o.o_orderdate < date '1994-07-01'
+group by
+  p.p_type
+order by
+  avg_value desc
+limit 20),
+
+-- Ranked Customers by Revenue --
+(select
+  c_name,
+  c_custkey,
+  total_revenue,
+  revenue_rank
+from
+  (select
+    c.c_name,
+    c.c_custkey,
+    sum(l.l_extendedprice * (1 - l.l_discount)) as total_revenue,
+    dense_rank() over (order by sum(l.l_extendedprice * (1 - l.l_discount)) desc) as revenue_rank
+  from
+    customer c,
+    orders o,
+    lineitem l
+  where
+    c.c_custkey = o.o_custkey
+    and o.o_orderkey = l.l_orderkey
+  group by
+    c.c_custkey,
+    c.c_name) as ranked
+where
+  revenue_rank <= 10),
+
+-- Ranked Nations by Customer Count --
+(select
+  n_name,
+  customer_count,
+  cust_rank
+from
+  (select
+    n.n_name,
+    count(distinct c.c_custkey) as customer_count,
+    dense_rank() over (order by count(distinct c.c_custkey) desc) as cust_rank
+  from
+    customer c,
+    orders o,
+    lineitem l,
+    nation n
+  where
+    c.c_custkey = o.o_custkey
+    and o.o_orderkey = l.l_orderkey
+    and c.c_nationkey = n.n_nationkey
+  group by
+    n.n_name) as ranked
+where
+  cust_rank <= 10),
+
+-- Daily Revenue with Total --
+(select
+  l_shipdate as "period",
+  sum(l_extendedprice * (1 - l_discount)) as revenue,
+  0 as is_total
+from
+  lineitem
+where
+  l_shipdate >= date '1994-01-01'
+  and l_shipdate < date '1994-02-01'
+group by
+  l_shipdate
+union all
+select
+  null as "period",
+  sum(l_extendedprice * (1 - l_discount)) as revenue,
+  1 as is_total
+from
+  lineitem
+where
+  l_shipdate >= date '1994-01-01'
+  and l_shipdate < date '1994-02-01'
+order by
+  is_total,
+  "period"),
+
+-- Daily Count with Total --
+(select
+  l_shipdate as "period",
+  count(*) as item_count,
+  0 as is_total
+from
+  lineitem
+where
+  l_shipdate >= date '1994-01-01'
+  and l_shipdate < date '1994-02-01'
+group by
+  l_shipdate
+union all
+select
+  null as "period",
+  count(*) as item_count,
+  1 as is_total
+from
+  lineitem
+where
+  l_shipdate >= date '1994-01-01'
+  and l_shipdate < date '1994-02-01'
+order by
+  is_total,
+  "period")
+);
+!plan
+!ok
+
+# End single-gleam-no-shared.iq

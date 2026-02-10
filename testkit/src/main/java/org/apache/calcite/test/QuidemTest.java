@@ -23,11 +23,16 @@ import org.apache.calcite.jdbc.CalciteConnection;
 import org.apache.calcite.plan.Contexts;
 import org.apache.calcite.plan.RelOptPlanner;
 import org.apache.calcite.plan.RelOptRule;
+import org.apache.calcite.plan.RelOptUtil;
 import org.apache.calcite.plan.visualizer.RuleMatchVisualizer;
 import org.apache.calcite.prepare.Prepare;
 import org.apache.calcite.tools.Program;
 import org.apache.calcite.tools.Programs;
+import org.apache.calcite.tools.RelBuilder;
+import org.apache.calcite.tools.RelBuilderFactory;
+import org.apache.calcite.rel.core.RelFactories;
 import org.apache.calcite.rel.rules.CoreRules;
+import org.apache.calcite.sql2rel.RelDecorrelator;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.runtime.Hook;
@@ -312,23 +317,37 @@ public abstract class QuidemTest {
               if (enable) {
                 closer.add(Hook.PROGRAM.addThread(
                     (Consumer<Holder<@Nullable Program>>) holder -> {
-                      // Minimal program: just run VolcanoPlanner, no HepPlanner phases
-                      Program volcanoOnly = (planner, rel, requiredOutputTraits,
+                      // Use the standard program sequence but skip HepPlanner phases
+                      // This ensures proper subquery handling and decorrelation
+                      Program decorrelateProgram = (planner, rel, requiredOutputTraits,
                           materializations, lattices) -> {
-                        for (org.apache.calcite.plan.RelOptMaterialization mat : materializations) {
-                          planner.addMaterialization(mat);
-                        }
-                        for (org.apache.calcite.plan.RelOptLattice lat : lattices) {
-                          planner.addLattice(lat);
-                        }
-                        planner.setRoot(rel);
-                        final org.apache.calcite.rel.RelNode rootRel =
-                            rel.getTraitSet().equals(requiredOutputTraits)
-                                ? rel : planner.changeTraits(rel, requiredOutputTraits);
-                        planner.setRoot(rootRel);
-                        final RelOptPlanner volcanoPlanner = planner.chooseDelegate();
-                        return volcanoPlanner.findBestExp();
+                        final RelBuilder relBuilder =
+                            RelFactories.LOGICAL_BUILDER.create(rel.getCluster(), null);
+                        return RelDecorrelator.decorrelateQuery(rel, relBuilder);
                       };
+
+                      Program volcanoOnly = Programs.sequence(
+                          Programs.subQuery(org.apache.calcite.rel.metadata.DefaultRelMetadataProvider.INSTANCE),
+                          decorrelateProgram,
+                          (planner, rel, requiredOutputTraits, materializations, lattices) -> {
+                            // Register default rules for VolcanoPlanner
+                            RelOptUtil.registerDefaultRules(planner, false, false);
+
+                            for (org.apache.calcite.plan.RelOptMaterialization mat : materializations) {
+                              planner.addMaterialization(mat);
+                            }
+                            for (org.apache.calcite.plan.RelOptLattice lat : lattices) {
+                              planner.addLattice(lat);
+                            }
+                            planner.setRoot(rel);
+                            final org.apache.calcite.rel.RelNode rootRel =
+                                rel.getTraitSet().equals(requiredOutputTraits)
+                                    ? rel
+                                    : planner.changeTraits(rel, requiredOutputTraits);
+                            planner.setRoot(rootRel);
+                            final RelOptPlanner volcanoPlanner = planner.chooseDelegate();
+                            return volcanoPlanner.findBestExp();
+                          });
                       holder.set(volcanoOnly);
                     }));
               }

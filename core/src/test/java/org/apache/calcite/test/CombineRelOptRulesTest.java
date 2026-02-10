@@ -17,8 +17,11 @@
 package org.apache.calcite.test;
 
 import org.apache.calcite.plan.RelOptUtil;
+import org.apache.calcite.rel.RelCollationTraitDef;
 import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.core.JoinRelType;
 import org.apache.calcite.rel.rules.CombineSharedComponentsRule;
+import org.apache.calcite.sql.JoinType;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.tools.RelBuilder;
 
@@ -50,9 +53,10 @@ class CombineRelOptRulesTest extends RelOptTestBase {
       // Query 1
       b.scan("EMP")
           .scan("DEPT")
-          .join(b.call(SqlStdOperatorTable.EQUALS,
-              b.field(2, 0, "DEPTNO"),
-              b.field(2, 1, "DEPTNO")))
+          .join(JoinRelType.INNER,
+              b.call(SqlStdOperatorTable.EQUALS,
+                  b.field(2, 0, "DEPTNO"),
+                  b.field(2, 1, "DEPTNO")))
           .filter(b.call(SqlStdOperatorTable.GREATER_THAN,
               b.field("SAL"),
               b.literal(2000)))
@@ -61,9 +65,10 @@ class CombineRelOptRulesTest extends RelOptTestBase {
       // Query 2
       b.scan("EMP")
           .scan("DEPT")
-          .join(b.call(SqlStdOperatorTable.EQUALS,
-              b.field(2, 0, "DEPTNO"),
-              b.field(2, 1, "DEPTNO")))
+          .join(JoinRelType.INNER,
+              b.call(SqlStdOperatorTable.EQUALS,
+                  b.field(2, 0, "DEPTNO"),
+                  b.field(2, 1, "DEPTNO")))
           .filter(b.call(SqlStdOperatorTable.EQUALS,
               b.field("LOC"),
               b.literal("CHICAGO")))
@@ -74,6 +79,7 @@ class CombineRelOptRulesTest extends RelOptTestBase {
 
     relFn(relFn)
         .withVolcanoPlanner(false, planner -> {
+          planner.addRelTraitDef(RelCollationTraitDef.INSTANCE);
           RelOptUtil.registerDefaultRules(planner, false, false);
           planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
         })
@@ -88,17 +94,19 @@ class CombineRelOptRulesTest extends RelOptTestBase {
       // Query 1: SELECT D.DNAME, S.GRADE, COUNT(*) ...
       b.scan("EMP")
           .scan("DEPT")
-          .join(b.call(SqlStdOperatorTable.EQUALS,
-              b.field(2, 0, "DEPTNO"),
-              b.field(2, 1, "DEPTNO")))
+          .join(JoinRelType.INNER,
+              b.call(SqlStdOperatorTable.EQUALS,
+                  b.field(2, 0, "DEPTNO"),
+                  b.field(2, 1, "DEPTNO")))
           .scan("SALGRADE")
-          .join(b.call(SqlStdOperatorTable.AND,
-              b.call(SqlStdOperatorTable.GREATER_THAN_OR_EQUAL,
-                  b.field(2, 0, "SAL"),
-                  b.field(2, 1, "LOSAL")),
-              b.call(SqlStdOperatorTable.LESS_THAN_OR_EQUAL,
-                  b.field(2, 0, "SAL"),
-                  b.field(2, 1, "HISAL"))))
+          .join(JoinRelType.INNER,
+              b.call(SqlStdOperatorTable.AND,
+                  b.call(SqlStdOperatorTable.GREATER_THAN_OR_EQUAL,
+                      b.field(2, 0, "SAL"),
+                      b.field(2, 1, "LOSAL")),
+                  b.call(SqlStdOperatorTable.LESS_THAN_OR_EQUAL,
+                      b.field(2, 0, "SAL"),
+                      b.field(2, 1, "HISAL"))))
           .aggregate(
               b.groupKey("DNAME", "GRADE"),
               b.count(false, "EMP_COUNT"));
@@ -106,17 +114,19 @@ class CombineRelOptRulesTest extends RelOptTestBase {
       // Query 2: SELECT D.DNAME, S.GRADE, AVG(SAL) ...
       b.scan("EMP")
           .scan("DEPT")
-          .join(b.call(SqlStdOperatorTable.EQUALS,
-              b.field(2, 0, "DEPTNO"),
-              b.field(2, 1, "DEPTNO")))
+          .join(JoinRelType.INNER,
+              b.call(SqlStdOperatorTable.EQUALS,
+                  b.field(2, 0, "DEPTNO"),
+                  b.field(2, 1, "DEPTNO")))
           .scan("SALGRADE")
-          .join(b.call(SqlStdOperatorTable.AND,
-              b.call(SqlStdOperatorTable.GREATER_THAN_OR_EQUAL,
-                  b.field(2, 0, "SAL"),
-                  b.field(2, 1, "LOSAL")),
-              b.call(SqlStdOperatorTable.LESS_THAN_OR_EQUAL,
-                  b.field(2, 0, "SAL"),
-                  b.field(2, 1, "HISAL"))))
+          .join(JoinRelType.INNER,
+              b.call(SqlStdOperatorTable.AND,
+                  b.call(SqlStdOperatorTable.GREATER_THAN_OR_EQUAL,
+                      b.field(2, 0, "SAL"),
+                      b.field(2, 1, "LOSAL")),
+                  b.call(SqlStdOperatorTable.LESS_THAN_OR_EQUAL,
+                      b.field(2, 0, "SAL"),
+                      b.field(2, 1, "HISAL"))))
           .aggregate(
               b.groupKey("DNAME", "GRADE"),
               b.avg(false, "AVG_SAL", b.field("SAL")));
@@ -126,6 +136,7 @@ class CombineRelOptRulesTest extends RelOptTestBase {
 
     relFn(relFn)
         .withVolcanoPlanner(false, planner -> {
+          planner.addRelTraitDef(RelCollationTraitDef.INSTANCE);
           RelOptUtil.registerDefaultRules(planner, false, false);
           planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
         })
@@ -168,6 +179,7 @@ class CombineRelOptRulesTest extends RelOptTestBase {
 
     relFn(relFn)
         .withVolcanoPlanner(false, planner -> {
+          planner.addRelTraitDef(RelCollationTraitDef.INSTANCE);
           RelOptUtil.registerDefaultRules(planner, false, false);
           planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
         })
@@ -219,6 +231,7 @@ class CombineRelOptRulesTest extends RelOptTestBase {
 
     relFn(relFn)
         .withVolcanoPlanner(false, planner -> {
+          planner.addRelTraitDef(RelCollationTraitDef.INSTANCE);
           RelOptUtil.registerDefaultRules(planner, false, false);
           planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
         })
@@ -254,6 +267,7 @@ class CombineRelOptRulesTest extends RelOptTestBase {
 
     relFn(relFn)
         .withVolcanoPlanner(false, planner -> {
+          planner.addRelTraitDef(RelCollationTraitDef.INSTANCE);
           RelOptUtil.registerDefaultRules(planner, false, false);
           planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
         })
@@ -268,9 +282,10 @@ class CombineRelOptRulesTest extends RelOptTestBase {
       // Query 1: SELECT D.DNAME, SUM(E.SAL) FROM EMP E JOIN DEPT D ... GROUP BY D.DNAME
       b.scan("EMP")
           .scan("DEPT")
-          .join(b.call(SqlStdOperatorTable.EQUALS,
-              b.field(2, 0, "DEPTNO"),
-              b.field(2, 1, "DEPTNO")))
+          .join(JoinRelType.INNER,
+              b.call(SqlStdOperatorTable.EQUALS,
+                  b.field(2, 0, "DEPTNO"),
+                  b.field(2, 1, "DEPTNO")))
           .aggregate(
               b.groupKey("DNAME"),
               b.sum(false, "TOTAL_SAL", b.field("SAL")));
@@ -278,9 +293,10 @@ class CombineRelOptRulesTest extends RelOptTestBase {
       // Query 2: SELECT D.LOC, COUNT(*) FROM EMP E JOIN DEPT D ... GROUP BY D.LOC
       b.scan("EMP")
           .scan("DEPT")
-          .join(b.call(SqlStdOperatorTable.EQUALS,
-              b.field(2, 0, "DEPTNO"),
-              b.field(2, 1, "DEPTNO")))
+          .join(JoinRelType.INNER,
+              b.call(SqlStdOperatorTable.EQUALS,
+                  b.field(2, 0, "DEPTNO"),
+                  b.field(2, 1, "DEPTNO")))
           .aggregate(
               b.groupKey("LOC"),
               b.count(false, "EMP_CNT"));
@@ -290,6 +306,7 @@ class CombineRelOptRulesTest extends RelOptTestBase {
 
     relFn(relFn)
         .withVolcanoPlanner(false, planner -> {
+          planner.addRelTraitDef(RelCollationTraitDef.INSTANCE);
           RelOptUtil.registerDefaultRules(planner, false, false);
           planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
         })
@@ -331,6 +348,7 @@ class CombineRelOptRulesTest extends RelOptTestBase {
 
     relFn(relFn)
         .withVolcanoPlanner(false, planner -> {
+          planner.addRelTraitDef(RelCollationTraitDef.INSTANCE);
           RelOptUtil.registerDefaultRules(planner, false, false);
           planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
         })
@@ -349,9 +367,10 @@ class CombineRelOptRulesTest extends RelOptTestBase {
                   b.field("SAL"),
                   b.literal(2000)))
           .scan("DEPT")
-          .join(b.call(SqlStdOperatorTable.EQUALS,
-              b.field(2, 0, "DEPTNO"),
-              b.field(2, 1, "DEPTNO")))
+          .join(JoinRelType.INNER,
+              b.call(SqlStdOperatorTable.EQUALS,
+                  b.field(2, 0, "DEPTNO"),
+                  b.field(2, 1, "DEPTNO")))
           .aggregate(
               b.groupKey("DNAME"),
               b.count(false, "HIGH_EARNER_CNT"));
@@ -363,9 +382,10 @@ class CombineRelOptRulesTest extends RelOptTestBase {
                   b.field("SAL"),
                   b.literal(2000)))
           .scan("DEPT")
-          .join(b.call(SqlStdOperatorTable.EQUALS,
-              b.field(2, 0, "DEPTNO"),
-              b.field(2, 1, "DEPTNO")))
+          .join(JoinRelType.INNER,
+              b.call(SqlStdOperatorTable.EQUALS,
+                  b.field(2, 0, "DEPTNO"),
+                  b.field(2, 1, "DEPTNO")))
           .aggregate(
               b.groupKey("DNAME"),
               b.avg(false, "AVG_HIGH_SAL", b.field("SAL")));
@@ -375,6 +395,7 @@ class CombineRelOptRulesTest extends RelOptTestBase {
 
     relFn(relFn)
         .withVolcanoPlanner(false, planner -> {
+          planner.addRelTraitDef(RelCollationTraitDef.INSTANCE);
           RelOptUtil.registerDefaultRules(planner, false, false);
           planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
         })
@@ -388,9 +409,10 @@ class CombineRelOptRulesTest extends RelOptTestBase {
       // Query 1: Employees in high-salary departments
       b.scan("EMP")
           .scan("DEPT")
-          .join(b.call(SqlStdOperatorTable.EQUALS,
-              b.field(2, 0, "DEPTNO"),
-              b.field(2, 1, "DEPTNO")))
+          .join(JoinRelType.INNER,
+              b.call(SqlStdOperatorTable.EQUALS,
+                  b.field(2, 0, "DEPTNO"),
+                  b.field(2, 1, "DEPTNO")))
           .project(
               b.field("EMPNO"),
               b.field("ENAME"),
@@ -408,6 +430,7 @@ class CombineRelOptRulesTest extends RelOptTestBase {
 
     relFn(relFn)
         .withVolcanoPlanner(false, planner -> {
+          planner.addRelTraitDef(RelCollationTraitDef.INSTANCE);
           RelOptUtil.registerDefaultRules(planner, false, false);
           planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
         })
@@ -424,6 +447,7 @@ class CombineRelOptRulesTest extends RelOptTestBase {
 
     sql(sql)
         .withVolcanoPlanner(false, planner -> {
+          planner.addRelTraitDef(RelCollationTraitDef.INSTANCE);
           RelOptUtil.registerDefaultRules(planner, false, false);
           planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
         })
@@ -438,6 +462,7 @@ class CombineRelOptRulesTest extends RelOptTestBase {
 
     sql(sql)
         .withVolcanoPlanner(false, planner -> {
+          planner.addRelTraitDef(RelCollationTraitDef.INSTANCE);
           RelOptUtil.registerDefaultRules(planner, false, false);
           planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
         })
@@ -452,6 +477,7 @@ class CombineRelOptRulesTest extends RelOptTestBase {
 
     sql(sql)
         .withVolcanoPlanner(false, planner -> {
+          planner.addRelTraitDef(RelCollationTraitDef.INSTANCE);
           RelOptUtil.registerDefaultRules(planner, false, false);
           planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
         })
@@ -471,6 +497,7 @@ class CombineRelOptRulesTest extends RelOptTestBase {
 
     sql(sql)
         .withVolcanoPlanner(false, planner -> {
+          planner.addRelTraitDef(RelCollationTraitDef.INSTANCE);
           RelOptUtil.registerDefaultRules(planner, false, false);
           planner.addRule(CombineSharedComponentsRule.Config.DEFAULT.toRule());
         })

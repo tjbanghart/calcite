@@ -104,6 +104,7 @@ dependencies {
     testRuntimeOnly("org.locationtech.proj4j:proj4j-epsg")
 
     testRuntimeOnly("org.apache.logging.log4j:log4j-slf4j-impl")
+    testRuntimeOnly(project(":plus"))
 }
 
 tasks.jar {
@@ -293,5 +294,41 @@ for (db in listOf("h2", "mysql", "oracle", "postgresql")) {
     }
     integTestAll {
         dependsOn(task)
+    }
+}
+
+// Task to run CoreQuidemTest with specific .iq file(s) from command line
+tasks.register<JavaExec>("runQuidemTest") {
+    group = "verification"
+    description = "Run CoreQuidemTest with specific .iq file(s). Usage: ./gradlew :core:runQuidemTest -Pargs=\"sql/file.iq\""
+
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.apache.calcite.test.CoreQuidemTest")
+
+    // Get arguments from -Pargs="file.iq" or -Pargs="file1.iq,file2.iq"
+    if (project.hasProperty("args")) {
+        args(project.property("args").toString().split(",").map { it.trim() })
+    }
+
+    // Forward JVM args for profiling
+    if (System.getProperty("org.gradle.jvmargs") != null) {
+        jvmArgs(System.getProperty("org.gradle.jvmargs").split(" "))
+    }
+}
+
+// Task to run the MULTI query sharing benchmark
+tasks.register<JavaExec>("runBenchmark") {
+    group = "benchmark"
+    description = "Run MULTI query sharing benchmark. Usage: ./gradlew :core:runBenchmark -PbenchmarkArgs=\"--queries=50\""
+
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.apache.calcite.test.MultiQueryBenchmarkCli")
+    maxHeapSize = "2g"
+
+    // Get arguments from -PbenchmarkArgs="--queries=50 --iterations=10"
+    if (project.hasProperty("benchmarkArgs")) {
+        args(project.property("benchmarkArgs").toString().split(" ").filter { it.isNotBlank() })
     }
 }

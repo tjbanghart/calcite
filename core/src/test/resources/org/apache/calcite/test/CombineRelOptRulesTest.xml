@@ -16,230 +16,236 @@
   ~ limitations under the License.
   -->
 <Root>
-  <TestCase name="testCombineTwoSimpleScans">
-    <Resource name="planBefore">
-      <![CDATA[
-Combine
-  LogicalTableScan(table=[[scott, EMP]])
-  LogicalTableScan(table=[[scott, EMP]])
-]]>
-    </Resource>
-    <Resource name="planAfter">
-      <![CDATA[
-Combine
-  LogicalTableSpool(readType=[LAZY], writeType=[EAGER], table=[[TEMP, spool_0]])
-    LogicalTableScan(table=[[scott, EMP]])
-  LogicalTableScan(table=[[TEMP, spool_0]])
-]]>
+  <TestCase name="testComplexSharedPatternSQL">
+    <Resource name="sql">
+      <![CDATA[MULTI((SELECT D.DNAME, COUNT(*) as CNT  FROM EMP E JOIN DEPT D ON E.DEPTNO = D.DEPTNO  WHERE E.SAL > 2000 GROUP BY D.DNAME), (SELECT D.DNAME, AVG(E.SAL) as AVG_SAL  FROM EMP E JOIN DEPT D ON E.DEPTNO = D.DEPTNO  WHERE E.SAL > 2000 GROUP BY D.DNAME))]]>
     </Resource>
   </TestCase>
-  <TestCase name="testCombineScansWithDifferentFilters">
+  <TestCase name="testSharedAggregationBase">
     <Resource name="planBefore">
       <![CDATA[
 Combine
-  LogicalFilter(condition=[>($5, 3000)])
+  LogicalAggregate(group=[{7}], TOTAL_SAL=[SUM($5)], EMP_CNT=[COUNT()])
     LogicalTableScan(table=[[scott, EMP]])
-  LogicalFilter(condition=[=($7, 10)])
-    LogicalTableScan(table=[[scott, EMP]])
+  LogicalFilter(condition=[>($1, 10000)])
+    LogicalAggregate(group=[{7}], TOTAL_SAL=[SUM($5)])
+      LogicalTableScan(table=[[scott, EMP]])
 ]]>
     </Resource>
     <Resource name="planAfter">
       <![CDATA[
 EnumerableCombine
-  EnumerableFilter(condition=[>($5, 3000)])
+  EnumerableAggregate(group=[{7}], TOTAL_SAL=[SUM($5)], EMP_CNT=[COUNT()])
     EnumerableTableScan(table=[[scott, EMP]])
-  EnumerableFilter(condition=[=($7, 10)])
-    EnumerableTableScan(table=[[scott, EMP]])
-]]>
-    </Resource>
-  </TestCase>
-
-  <TestCase name="testCombineQueriesWithDifferentProjections">
-    <Resource name="planBefore">
-      <![CDATA[
-Combine
-  LogicalProject(EMPNO=[$0], ENAME=[$1])
-    LogicalTableScan(table=[[scott, EMP]])
-  LogicalProject(DEPTNO=[$7], SAL=[$5], COMM=[$6])
-    LogicalTableScan(table=[[scott, EMP]])
-]]>
-    </Resource>
-    <Resource name="planAfter">
-      <![CDATA[
-Combine
-  LogicalProject(EMPNO=[$0], ENAME=[$1])
-    LogicalTableSpool(readType=[LAZY], writeType=[EAGER], table=[[TEMP, spool_0]])
-      LogicalTableScan(table=[[scott, EMP]])
-  LogicalProject(DEPTNO=[$7], SAL=[$5], COMM=[$6])
-    LogicalTableScan(table=[[TEMP, spool_0]])
-]]>
-    </Resource>
-  </TestCase>
-
-  <TestCase name="testCombineAggregateQueries">
-    <Resource name="planBefore">
-      <![CDATA[
-Combine
-  LogicalAggregate(group=[{7}], CNT=[COUNT()])
-    LogicalTableScan(table=[[scott, EMP]])
-  LogicalAggregate(group=[{2}], AVG_SAL=[AVG($5)], MAX_SAL=[MAX($5)])
-    LogicalTableScan(table=[[scott, EMP]])
-]]>
-    </Resource>
-    <Resource name="planAfter">
-      <![CDATA[
-Combine
-  LogicalAggregate(group=[{7}], CNT=[COUNT()])
-    LogicalTableSpool(readType=[LAZY], writeType=[EAGER], table=[[TEMP, spool_0]])
-      LogicalTableScan(table=[[scott, EMP]])
-  LogicalAggregate(group=[{2}], AVG_SAL=[AVG($5)], MAX_SAL=[MAX($5)])
-    LogicalTableScan(table=[[TEMP, spool_0]])
-]]>
-    </Resource>
-  </TestCase>
-
-  <TestCase name="testCombineThreeIndependentQueries">
-    <Resource name="planBefore">
-      <![CDATA[
-Combine
-  LogicalTableScan(table=[[scott, EMP]])
-  LogicalProject(EMPNO=[$0], SAL=[$5])
-    LogicalFilter(condition=[>($5, 2000)])
-      LogicalTableScan(table=[[scott, EMP]])
-  LogicalAggregate(group=[{7}], TOTAL_SAL=[SUM($5)])
-    LogicalTableScan(table=[[scott, EMP]])
-]]>
-    </Resource>
-    <Resource name="planAfter">
-      <![CDATA[
-EnumerableCombine
-  EnumerableTableScan(table=[[scott, EMP]])
-  EnumerableProject(EMPNO=[$0], SAL=[$5])
-    EnumerableFilter(condition=[>($5, 2000)])
+  EnumerableFilter(condition=[>($1, 10000)])
+    EnumerableAggregate(group=[{7}], TOTAL_SAL=[SUM($5)])
       EnumerableTableScan(table=[[scott, EMP]])
-  EnumerableAggregate(group=[{7}], TOTAL_SAL=[SUM($5)])
-    EnumerableTableScan(table=[[scott, EMP]])
 ]]>
     </Resource>
   </TestCase>
-
-  <TestCase name="testCombineDifferentTables">
-    <Resource name="planBefore">
-      <![CDATA[
-Combine
-  LogicalFilter(condition=[>($5, 2500)])
-    LogicalTableScan(table=[[scott, EMP]])
-  LogicalFilter(condition=[=($2, 'DALLAS')])
-    LogicalTableScan(table=[[scott, DEPT]])
-]]>
+  <TestCase name="testSharedAggregationSQL">
+    <Resource name="sql">
+      <![CDATA[MULTI((SELECT DEPTNO, SUM(SAL) as TOTAL, COUNT(*) as CNT FROM EMP GROUP BY DEPTNO), (SELECT DEPTNO, AVG(SAL) as AVG_SAL FROM EMP GROUP BY DEPTNO))]]>
     </Resource>
-  </TestCase>
-
-  <TestCase name="testCombineWithSort">
     <Resource name="planBefore">
       <![CDATA[
 Combine
-  LogicalSort(sort0=[$5], dir0=[DESC])
-    LogicalTableScan(table=[[scott, EMP]])
-  LogicalSort(sort0=[$1], dir0=[ASC])
-    LogicalAggregate(group=[{7}], CNT=[COUNT()])
-      LogicalTableScan(table=[[scott, EMP]])
+  LogicalAggregate(group=[{0}], TOTAL=[SUM($1)], CNT=[COUNT()])
+    LogicalProject(DEPTNO=[$7], SAL=[$5])
+      LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+  LogicalAggregate(group=[{0}], AVG_SAL=[AVG($1)])
+    LogicalProject(DEPTNO=[$7], SAL=[$5])
+      LogicalTableScan(table=[[CATALOG, SALES, EMP]])
 ]]>
     </Resource>
     <Resource name="planAfter">
       <![CDATA[
-Combine
-  LogicalSort(sort0=[$5], dir0=[DESC])
-    LogicalTableSpool(readType=[LAZY], writeType=[EAGER], table=[[TEMP, spool_0]])
-      LogicalTableScan(table=[[scott, EMP]])
-  LogicalSort(sort0=[$1], dir0=[ASC])
-    LogicalAggregate(group=[{7}], CNT=[COUNT()])
-      LogicalTableScan(table=[[TEMP, spool_0]])
+EnumerableCombine
+  EnumerableAggregate(group=[{7}], TOTAL=[$SUM0($5)], CNT=[COUNT()])
+    EnumerableTableScan(table=[[CATALOG, SALES, EMP]])
+  EnumerableProject(DEPTNO=[$0], AVG_SAL=[CAST(/($1, $2)):INTEGER NOT NULL])
+    EnumerableAggregate(group=[{7}], agg#0=[$SUM0($5)], agg#1=[COUNT()])
+      EnumerableTableScan(table=[[CATALOG, SALES, EMP]])
 ]]>
     </Resource>
   </TestCase>
-
-  <TestCase name="testSingleQueryNoCombine">
-    <Resource name="planBefore">
-      <![CDATA[
-LogicalFilter(condition=[>($5, 1000)])
-  LogicalTableScan(table=[[scott, EMP]])
-]]>
-    </Resource>
-  </TestCase>
-
-  <TestCase name="testCombineAllOnStack">
+  <TestCase name="testSharedJoin">
     <Resource name="planBefore">
       <![CDATA[
 Combine
-  LogicalTableScan(table=[[scott, EMP]])
-  LogicalTableScan(table=[[scott, DEPT]])
-  LogicalFilter(condition=[IS NOT NULL($3)])
-    LogicalTableScan(table=[[scott, EMP]])
+  LogicalProject(EMPNO=[$0], DNAME=[$9])
+    LogicalFilter(condition=[>($5, 2000)])
+      LogicalJoin(condition=[=($7, $8)], joinType=[inner])
+        LogicalTableScan(table=[[scott, EMP]])
+        LogicalTableScan(table=[[scott, DEPT]])
+  LogicalProject(ENAME=[$1], LOC=[$10])
+    LogicalFilter(condition=[=($10, 'CHICAGO')])
+      LogicalJoin(condition=[=($7, $8)], joinType=[inner])
+        LogicalTableScan(table=[[scott, EMP]])
+        LogicalTableScan(table=[[scott, DEPT]])
 ]]>
     </Resource>
     <Resource name="planAfter">
       <![CDATA[
-Combine
-  LogicalTableSpool(readType=[LAZY], writeType=[EAGER], table=[[TEMP, spool_0]])
-    LogicalTableScan(table=[[scott, EMP]])
-  LogicalTableScan(table=[[scott, DEPT]])
-  LogicalFilter(condition=[IS NOT NULL($3)])
-    LogicalTableScan(table=[[TEMP, spool_0]])
+EnumerableCombine
+  EnumerableProject(EMPNO=[$0], DNAME=[$9])
+    EnumerableFilter(condition=[>($5, 2000)])
+      EnumerableTableSpool(readType=[LAZY], writeType=[LAZY], table=[[TEMP, spool_0]])
+        EnumerableProject(EMPNO=[$3], ENAME=[$4], JOB=[$5], MGR=[$6], HIREDATE=[$7], SAL=[$8], COMM=[$9], DEPTNO=[$10], DEPTNO0=[$0], DNAME=[$1], LOC=[$2])
+          EnumerableHashJoin(condition=[=($0, $10)], joinType=[inner])
+            EnumerableTableScan(table=[[scott, DEPT]])
+            EnumerableTableScan(table=[[scott, EMP]])
+  EnumerableProject(ENAME=[$1], LOC=[$10])
+    EnumerableFilter(condition=[=($10, 'CHICAGO')])
+      EnumerableInterpreter
+        BindableTableScan(table=[[TEMP, spool_0]])
 ]]>
     </Resource>
   </TestCase>
-<TestCase name="testUnionToDistinctRuleWithRelBuilder">
-  <Resource name="planBefore">
-    <![CDATA[
-LogicalUnion(all=[false])
-  LogicalTableScan(table=[[scott, DEPT]])
-  LogicalTableScan(table=[[scott, DEPT]])
-]]>
-  </Resource>
-  <Resource name="planAfter">
-    <![CDATA[
+  <TestCase name="testSharedComplexJoin">
+    <Resource name="planBefore">
+      <![CDATA[
 Combine
-  LogicalTableSpool(readType=[LAZY], writeType=[EAGER], table=[[TEMP, spool_0]])
-    LogicalTableScan(table=[[scott, EMP]])
-  LogicalTableScan(table=[[TEMP, spool_0]])
+  LogicalAggregate(group=[{9, 11}], EMP_COUNT=[COUNT()])
+    LogicalJoin(condition=[AND(>=($5, $12), <=($5, $13))], joinType=[inner])
+      LogicalJoin(condition=[=($7, $8)], joinType=[inner])
+        LogicalTableScan(table=[[scott, EMP]])
+        LogicalTableScan(table=[[scott, DEPT]])
+      LogicalTableScan(table=[[scott, SALGRADE]])
+  LogicalAggregate(group=[{9, 11}], AVG_SAL=[AVG($5)])
+    LogicalJoin(condition=[AND(>=($5, $12), <=($5, $13))], joinType=[inner])
+      LogicalJoin(condition=[=($7, $8)], joinType=[inner])
+        LogicalTableScan(table=[[scott, EMP]])
+        LogicalTableScan(table=[[scott, DEPT]])
+      LogicalTableScan(table=[[scott, SALGRADE]])
 ]]>
-  </Resource>
-</TestCase>
-  <TestCase name="testCombineWithSharedFilteredBase">
+    </Resource>
+    <Resource name="planAfter">
+      <![CDATA[
+EnumerableCombine
+  EnumerableAggregate(group=[{9, 11}], EMP_COUNT=[COUNT()])
+    EnumerableTableSpool(readType=[LAZY], writeType=[LAZY], table=[[TEMP, spool_0]])
+      EnumerableNestedLoopJoin(condition=[AND(>=($5, $12), <=($5, $13))], joinType=[inner])
+        EnumerableProject(EMPNO=[$3], ENAME=[$4], JOB=[$5], MGR=[$6], HIREDATE=[$7], SAL=[$8], COMM=[$9], DEPTNO=[$10], DEPTNO0=[$0], DNAME=[$1], LOC=[$2])
+          EnumerableHashJoin(condition=[=($0, $10)], joinType=[inner])
+            EnumerableTableScan(table=[[scott, DEPT]])
+            EnumerableTableScan(table=[[scott, EMP]])
+        EnumerableTableScan(table=[[scott, SALGRADE]])
+  EnumerableProject(DNAME=[$0], GRADE=[$1], AVG_SAL=[CAST(/(CAST(CASE(=($3, 0), null:DECIMAL(19, 2), $2)):DECIMAL(7, 2), $3)):DECIMAL(7, 2)])
+    EnumerableAggregate(group=[{9, 11}], agg#0=[$SUM0($5)], agg#1=[COUNT($5)])
+      EnumerableInterpreter
+        BindableTableScan(table=[[TEMP, spool_0]])
+]]>
+    </Resource>
+  </TestCase>
+  <TestCase name="testSharedFilter">
     <Resource name="planBefore">
       <![CDATA[
 Combine
   LogicalProject(EMPNO=[$0], SAL=[$5])
-    LogicalFilter(condition=[>($5, 1000)])
+    LogicalFilter(condition=[AND(>($5, 2000), =($7, 10))])
       LogicalTableScan(table=[[scott, EMP]])
-  LogicalProject(ENAME=[$1], DEPTNO=[$7])
-    LogicalFilter(condition=[>($5, 1000)])
+  LogicalProject(ENAME=[$1], JOB=[$2])
+    LogicalFilter(condition=[AND(>($5, 2000), =($7, 10))])
+      LogicalTableScan(table=[[scott, EMP]])
+]]>
+    </Resource>
+    <Resource name="planAfter">
+      <![CDATA[
+EnumerableSort(sort0=[$0], dir0=[ASC])
+  EnumerableCombine
+    EnumerableProject(EMPNO=[$0], SAL=[$5])
+      EnumerableTableSpool(readType=[LAZY], writeType=[LAZY], table=[[TEMP, spool_0]])
+        EnumerableFilter(condition=[AND(>($5, 2000), =($7, 10))])
+          EnumerableTableScan(table=[[scott, EMP]])
+    EnumerableProject(ENAME=[$1], JOB=[$2])
+      EnumerableInterpreter
+        BindableTableScan(table=[[TEMP, spool_0]])
+]]>
+    </Resource>
+  </TestCase>
+  <TestCase name="testSharedFilterJoinAggregate">
+    <Resource name="planBefore">
+      <![CDATA[
+Combine
+  LogicalAggregate(group=[{9}], HIGH_EARNER_CNT=[COUNT()])
+    LogicalJoin(condition=[=($7, $8)], joinType=[inner])
+      LogicalFilter(condition=[>($5, 2000)])
+        LogicalTableScan(table=[[scott, EMP]])
+      LogicalTableScan(table=[[scott, DEPT]])
+  LogicalAggregate(group=[{9}], AVG_HIGH_SAL=[AVG($5)])
+    LogicalJoin(condition=[=($7, $8)], joinType=[inner])
+      LogicalFilter(condition=[>($5, 2000)])
+        LogicalTableScan(table=[[scott, EMP]])
+      LogicalTableScan(table=[[scott, DEPT]])
+]]>
+    </Resource>
+    <Resource name="planAfter">
+      <![CDATA[
+EnumerableCombine
+  EnumerableAggregate(group=[{9}], HIGH_EARNER_CNT=[COUNT()])
+    EnumerableTableSpool(readType=[LAZY], writeType=[LAZY], table=[[TEMP, spool_0]])
+      EnumerableProject(EMPNO=[$3], ENAME=[$4], JOB=[$5], MGR=[$6], HIREDATE=[$7], SAL=[$8], COMM=[$9], DEPTNO=[$10], DEPTNO0=[$0], DNAME=[$1], LOC=[$2])
+        EnumerableHashJoin(condition=[=($0, $10)], joinType=[inner])
+          EnumerableTableScan(table=[[scott, DEPT]])
+          EnumerableFilter(condition=[>($5, 2000)])
+            EnumerableTableScan(table=[[scott, EMP]])
+  EnumerableProject(DNAME=[$0], AVG_HIGH_SAL=[CAST(/(CAST(CASE(=($2, 0), null:DECIMAL(19, 2), $1)):DECIMAL(7, 2), $2)):DECIMAL(7, 2)])
+    EnumerableAggregate(group=[{9}], agg#0=[$SUM0($5)], agg#1=[COUNT($5)])
+      EnumerableInterpreter
+        BindableTableScan(table=[[TEMP, spool_0]])
+]]>
+    </Resource>
+  </TestCase>
+  <TestCase name="testSharedFilterWithDifferentProjections">
+    <Resource name="planBefore">
+      <![CDATA[
+Combine
+  LogicalAggregate(group=[{}], CNT=[COUNT()])
+    LogicalFilter(condition=[SEARCH($5, Sarg[[1000..3000]])])
+      LogicalTableScan(table=[[scott, EMP]])
+  LogicalAggregate(group=[{}], AVG_SAL=[AVG($5)])
+    LogicalFilter(condition=[SEARCH($5, Sarg[[1000..3000]])])
+      LogicalTableScan(table=[[scott, EMP]])
+  LogicalProject(ENAME=[$1], SAL=[$5])
+    LogicalFilter(condition=[SEARCH($5, Sarg[[1000..3000]])])
       LogicalTableScan(table=[[scott, EMP]])
 ]]>
     </Resource>
     <Resource name="planAfter">
       <![CDATA[
 EnumerableCombine
-  EnumerableProject(EMPNO=[$0], SAL=[$5])
-    EnumerableTableSpool(readType=[LAZY], writeType=[EAGER], table=[[TEMP, spool_0]])
-      EnumerableFilter(condition=[>($5, 1000)])
+  EnumerableAggregate(group=[{}], CNT=[COUNT()])
+    EnumerableTableSpool(readType=[LAZY], writeType=[LAZY], table=[[TEMP, spool_0]])
+      EnumerableFilter(condition=[SEARCH($5, Sarg[[1000..3000]])])
         EnumerableTableScan(table=[[scott, EMP]])
-  EnumerableProject(ENAME=[$1], DEPTNO=[$7])
+  EnumerableProject(AVG_SAL=[CAST(/(CAST(CASE(=($1, 0), null:DECIMAL(19, 2), $0)):DECIMAL(7, 2), $1)):DECIMAL(7, 2)])
+    EnumerableAggregate(group=[{}], agg#0=[$SUM0($5)], agg#1=[COUNT($5)])
+      EnumerableInterpreter
+        BindableTableScan(table=[[TEMP, spool_0]])
+  EnumerableProject(ENAME=[$1], SAL=[$5])
     EnumerableInterpreter
       BindableTableScan(table=[[TEMP, spool_0]])
 ]]>
     </Resource>
   </TestCase>
-  <TestCase name="testCombineWithSharedFilteredBaseSQL">
+  <TestCase name="testSharedJoinSQL">
+    <Resource name="sql">
+      <![CDATA[MULTI((SELECT E.EMPNO, D.DNAME FROM EMP E JOIN DEPT D ON E.DEPTNO = D.DEPTNO WHERE E.SAL > 2000), (SELECT E.ENAME, D.LOC FROM EMP E JOIN DEPT D ON E.DEPTNO = D.DEPTNO WHERE D.LOC = 'CHICAGO'))]]>
+    </Resource>
+  </TestCase>
+  <TestCase name="testSharedFilterSQL">
+    <Resource name="sql">
+      <![CDATA[MULTI((SELECT EMPNO, SAL FROM EMP WHERE SAL > 2000 AND DEPTNO = 10), (SELECT ENAME, JOB FROM EMP WHERE SAL > 2000 AND DEPTNO = 10))]]>
+    </Resource>
     <Resource name="planBefore">
       <![CDATA[
 Combine
   LogicalProject(EMPNO=[$0], SAL=[$5])
-    LogicalFilter(condition=[>($5, 1000)])
+    LogicalFilter(condition=[AND(>($5, 2000), =($7, 10))])
       LogicalTableScan(table=[[CATALOG, SALES, EMP]])
-  LogicalProject(ENAME=[$1], DEPTNO=[$7])
-    LogicalFilter(condition=[>($5, 1000)])
+  LogicalProject(ENAME=[$1], JOB=[$2])
+    LogicalFilter(condition=[AND(>($5, 2000), =($7, 10))])
       LogicalTableScan(table=[[CATALOG, SALES, EMP]])
 ]]>
     </Resource>
@@ -247,12 +253,89 @@ Combine
       <![CDATA[
 EnumerableCombine
   EnumerableProject(EMPNO=[$0], SAL=[$5])
-    EnumerableTableSpool(readType=[LAZY], writeType=[EAGER], table=[[TEMP, spool_0]])
-      EnumerableFilter(condition=[>($5, 1000)])
+    EnumerableTableSpool(readType=[LAZY], writeType=[LAZY], table=[[TEMP, spool_0]])
+      EnumerableFilter(condition=[AND(>($5, 2000), =($7, 10))])
         EnumerableTableScan(table=[[CATALOG, SALES, EMP]])
-  EnumerableProject(ENAME=[$1], DEPTNO=[$7])
+  EnumerableProject(ENAME=[$1], JOB=[$2])
     EnumerableInterpreter
       BindableTableScan(table=[[TEMP, spool_0]])
+]]>
+    </Resource>
+  </TestCase>
+  <TestCase name="testSharedJoinThenAggregation">
+    <Resource name="planBefore">
+      <![CDATA[
+Combine
+  LogicalAggregate(group=[{9}], TOTAL_SAL=[SUM($5)])
+    LogicalJoin(condition=[=($7, $8)], joinType=[inner])
+      LogicalTableScan(table=[[scott, EMP]])
+      LogicalTableScan(table=[[scott, DEPT]])
+  LogicalAggregate(group=[{10}], EMP_CNT=[COUNT()])
+    LogicalJoin(condition=[=($7, $8)], joinType=[inner])
+      LogicalTableScan(table=[[scott, EMP]])
+      LogicalTableScan(table=[[scott, DEPT]])
+]]>
+    </Resource>
+    <Resource name="planAfter">
+      <![CDATA[
+EnumerableCombine
+  EnumerableAggregate(group=[{9}], TOTAL_SAL=[SUM($5)])
+    EnumerableTableSpool(readType=[LAZY], writeType=[LAZY], table=[[TEMP, spool_0]])
+      EnumerableProject(EMPNO=[$3], ENAME=[$4], JOB=[$5], MGR=[$6], HIREDATE=[$7], SAL=[$8], COMM=[$9], DEPTNO=[$10], DEPTNO0=[$0], DNAME=[$1], LOC=[$2])
+        EnumerableHashJoin(condition=[=($0, $10)], joinType=[inner])
+          EnumerableTableScan(table=[[scott, DEPT]])
+          EnumerableTableScan(table=[[scott, EMP]])
+  EnumerableAggregate(group=[{10}], EMP_CNT=[COUNT()])
+    EnumerableInterpreter
+      BindableTableScan(table=[[TEMP, spool_0]])
+]]>
+    </Resource>
+  </TestCase>
+  <TestCase name="testSharedSubqueryPattern">
+    <Resource name="planBefore">
+      <![CDATA[
+Combine
+  LogicalProject(EMPNO=[$0], ENAME=[$1], DNAME=[$9])
+    LogicalJoin(condition=[=($7, $8)], joinType=[inner])
+      LogicalTableScan(table=[[scott, EMP]])
+      LogicalTableScan(table=[[scott, DEPT]])
+  LogicalTableScan(table=[[scott, DEPT]])
+]]>
+    </Resource>
+    <Resource name="planAfter">
+      <![CDATA[
+EnumerableCombine
+  EnumerableProject(EMPNO=[$3], ENAME=[$4], DNAME=[$1])
+    EnumerableHashJoin(condition=[=($0, $10)], joinType=[inner])
+      EnumerableTableScan(table=[[scott, DEPT]])
+      EnumerableTableScan(table=[[scott, EMP]])
+  EnumerableTableScan(table=[[scott, DEPT]])
+]]>
+    </Resource>
+  </TestCase>
+  <TestCase name="testSharedProjection">
+    <Resource name="planBefore">
+      <![CDATA[
+Combine
+  LogicalFilter(condition=[>($2, 50000)])
+    LogicalProject(EMPNO=[$0], ENAME=[$1], $f2=[*($5, 12)])
+      LogicalTableScan(table=[[scott, EMP]])
+  LogicalAggregate(group=[{}], AVG_ANNUAL=[AVG($0)])
+    LogicalProject($f2=[*($5, 12)])
+      LogicalTableScan(table=[[scott, EMP]])
+]]>
+    </Resource>
+    <Resource name="planAfter">
+      <![CDATA[
+EnumerableSort(sort0=[$0], dir0=[ASC])
+  EnumerableCombine
+    EnumerableProject(EMPNO=[$0], ENAME=[$1], $f2=[*($5, 12)])
+      EnumerableFilter(condition=[>(*($5, 12), 50000)])
+        EnumerableTableScan(table=[[scott, EMP]])
+    EnumerableProject(AVG_ANNUAL=[CAST(/(CAST(CASE(=($1, 0), null:DECIMAL(19, 2), $0)):DECIMAL(17, 2), $1)):DECIMAL(17, 2)])
+      EnumerableAggregate(group=[{}], agg#0=[$SUM0($0)], agg#1=[COUNT($0)])
+        EnumerableProject($f2=[*($5, 12)])
+          EnumerableTableScan(table=[[scott, EMP]])
 ]]>
     </Resource>
   </TestCase>

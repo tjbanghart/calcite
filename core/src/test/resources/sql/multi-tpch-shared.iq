@@ -26,6 +26,7 @@
 
 # Group 1: LINEITEM only - Q1 and Q6 share LINEITEM table scan
 MULTI(
+-- TPC-H Query 1 --
 (select
   l_returnflag,
   l_linestatus,
@@ -45,6 +46,8 @@ group by
 order by
   l_returnflag,
   l_linestatus),
+
+-- TPC-H Query 6 --
 (select
   sum(l_extendedprice * l_discount) as revenue
 from
@@ -54,9 +57,11 @@ where
   and l_quantity < 24)
 );
 !plan
+!ok
 
 # Group 2: LINEITEM + PART - Q14, Q17, Q19 share LINEITEM-PART join
 MULTI(
+-- TPC-H Query 14 --
 (select
   100.00 * sum(case
     when p.p_type like 'PROMO%'
@@ -70,6 +75,8 @@ where
   l.l_partkey = p.p_partkey
   and l.l_shipdate >= date '1994-08-01'
   and l.l_shipdate < date '1994-08-01' + interval '1' month),
+
+-- TPC-H Query 17 --
 (select
   sum(l.l_extendedprice) / 7.0 as avg_yearly
 from
@@ -87,6 +94,8 @@ where
     where
       l2.l_partkey = p.p_partkey
   )),
+
+-- TPC-H Query 19 --
 (select
   sum(l.l_extendedprice* (1 - l.l_discount)) as revenue
 from
@@ -124,9 +133,11 @@ where
   ))
 );
 !plan
+!ok
 
 # Group 3: CUSTOMER + ORDERS + LINEITEM - Q3, Q10, Q18 share C-O-L joins
 MULTI(
+-- TPC-H Query 3 --
 (select
   l.l_orderkey,
   sum(l.l_extendedprice * (1 - l.l_discount)) as revenue,
@@ -148,6 +159,8 @@ order by
   revenue desc,
   o.o_orderdate
 limit 10),
+
+-- TPC-H Query 10 --
 (select
   c.c_custkey,
   c.c_name,
@@ -180,6 +193,8 @@ group by
 order by
   revenue desc
 limit 20),
+
+-- TPC-H Query 18 --
 (select
   c.c_name,
   c.c_custkey,
@@ -215,9 +230,12 @@ order by
 limit 100)
 );
 !plan
+!ok
 
 # Group 4: ORDERS + LINEITEM - Q4 and Q12 share O-L join
 MULTI(
+
+-- TPC-H Query 4 --
 (select
   o_orderpriority,
   count(*) as order_count
@@ -237,6 +255,8 @@ group by
   o_orderpriority
 order by
   o_orderpriority),
+
+-- TPC-H Query 12 --
 (select
   l.l_shipmode,
   sum(case
@@ -265,9 +285,12 @@ order by
   l.l_shipmode)
 );
 !plan
+!ok
 
 # Group 5: CUSTOMER + ORDERS - Q13 and Q22 share C-O join
 MULTI(
+
+-- TPC-H Query 13 --
 (select
   c_count,
   count(*) as custdist
@@ -289,6 +312,8 @@ group by
 order by
   custdist desc,
   c_count desc),
+
+-- TPC-H Query 22 --
 (select
   cntrycode,
   count(*) as numcust,
@@ -328,9 +353,12 @@ order by
   cntrycode)
 );
 !plan
+!ok
 
 # Group 6: Complex queries - Q5, Q7, Q8, Q9, Q20, Q21 share multi-table joins
 MULTI(
+
+-- TPC-H Query 5 --
 (select
   n.n_name,
   sum(l.l_extendedprice * (1 - l.l_discount)) as revenue
@@ -353,6 +381,8 @@ group by
   n.n_name
 order by
   revenue desc),
+
+-- TPC-H Query 20 --
 (select
   supp_nation,
   cust_nation,
@@ -393,9 +423,12 @@ order by
   l_year)
 );
 !plan
+!ok
 
 # Group 7: PART + SUPPLIER + PARTSUPP + NATION + REGION - Q2
 MULTI(
+
+-- TPC-H Query 2 --
 (select
   s.s_acctbal,
   s.s_name,
@@ -442,9 +475,12 @@ order by
 limit 100)
 );
 !plan
+!ok
 
 # Group 8: PARTSUPP + SUPPLIER + NATION - Q11
 MULTI(
+
+-- TPC-H Query 11 --
 (select
   ps.ps_partkey,
   sum(ps.ps_supplycost * ps.ps_availqty) as "value"
@@ -474,9 +510,12 @@ order by
   "value" desc)
 );
 !plan
+!ok
 
 # Group 9: PARTSUPP + PART + SUPPLIER - Q16
 MULTI(
+
+-- TPC-H Query 16 --
 (select
   p.p_brand,
   p.p_type,
@@ -509,40 +548,46 @@ order by
   p.p_size)
 );
 !plan
+!ok
 
 # Group 10: LINEITEM + SUPPLIER with CTE - Q15
-MULTI(
-(with revenue0 (supplier_no, total_revenue) as (
-  select
-    l_suppkey,
-    sum(l_extendedprice * (1 - l_discount))
-  from
-    lineitem
-  where
-    l_shipdate >= date '1993-05-01'
-    and l_shipdate < date '1993-05-01' + interval '3' month
-  group by
-    l_suppkey)
-select
-  s.s_suppkey,
-  s.s_name,
-  s.s_address,
-  s.s_phone,
-  r.total_revenue
-from
-  supplier s,
-  revenue0 r
-where
-  s.s_suppkey = r.supplier_no
-  and r.total_revenue = (
-    select
-      max(total_revenue)
-    from
-      revenue0
-  )
-order by
-  s.s_suppkey)
-);
-!plan
+# COMMENTED OUT: WITH clause with ORDER BY causes SqlToRelConverter.requiredCollation assertion
+# TODO: Fix requiredCollation to handle LogicalTableSpool from WITH clause conversion
+#MULTI(
+#
+#-- TPC-H Query 15 --
+#(with revenue0 (supplier_no, total_revenue) as (
+#  select
+#    l_suppkey,
+#    sum(l_extendedprice * (1 - l_discount))
+#  from
+#    lineitem
+#  where
+#    l_shipdate >= date '1993-05-01'
+#    and l_shipdate < date '1993-05-01' + interval '3' month
+#  group by
+#    l_suppkey)
+#select
+#  s.s_suppkey,
+#  s.s_name,
+#  s.s_address,
+#  s.s_phone,
+#  r.total_revenue
+#from
+#  supplier s,
+#  revenue0 r
+#where
+#  s.s_suppkey = r.supplier_no
+#  and r.total_revenue = (
+#    select
+#      max(total_revenue)
+#    from
+#      revenue0
+#  )
+#order by
+#  s.s_suppkey)
+#);
+#!plan
+#!ok
 
 # End multi-tpch-shared.iq

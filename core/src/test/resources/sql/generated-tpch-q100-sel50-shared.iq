@@ -1,0 +1,737 @@
+# generated-tpch-q100-sel50-shared.iq - Generated TPC-H shareable query templates
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to you under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Query count: 100
+# Selectivity: 50%
+# Shared components: ENABLED
+#
+# SHAREABLE QUERY DESIGN:
+# - Groups of queries share identical subexpressions (same filter/join)
+# - Only final projections or aggregations differ
+# - CombineSharedComponentsRule should detect and optimize these
+#
+!use tpch
+!set outputformat mysql
+
+# Skip all HepPlanner preprocessing (including calc conversion)
+# and go directly to VolcanoPlanner for optimization
+!set volcanoonly true
+
+!set planner-rules "+COMBINE_SHARED_COMPONENTS"
+
+# ==============================================================================
+# ALL QUERIES (100 total) - Designed for subexpression sharing
+# Query breakdown:
+#   - Shared scan queries: 42 (groups share identical filtered scans)
+#   - Shared join queries: 23 (share identical join, differ in projection)
+#   - Shared aggregate queries: 20 (share base, differ in agg function)
+#   - Shared join-aggregate queries: 15 (share join+groupby, differ in agg)
+# ==============================================================================
+
+MULTI(
+-- Q1: LI-Qty-P1 (SharedScan) --
+(select l_orderkey, l_partkey, l_suppkey
+from lineitem
+where l_quantity <= 25
+order by 1
+limit 100),
+
+-- Q2: LI-Qty-P2 (SharedScan) --
+(select l_orderkey, l_suppkey, l_linenumber, l_quantity
+from lineitem
+where l_quantity <= 25
+order by 1
+limit 100),
+
+-- Q3: LI-Qty-P3 (SharedScan) --
+(select l_orderkey, l_linenumber, l_quantity
+from lineitem
+where l_quantity <= 25
+order by 1
+limit 100),
+
+-- Q4: LI-Qty-P4 (SharedScan) --
+(select l_orderkey, l_quantity, l_extendedprice, l_discount
+from lineitem
+where l_quantity <= 25
+order by 1
+limit 100),
+
+-- Q5: LI-Qty-P5 (SharedScan) --
+(select l_orderkey, l_extendedprice, l_discount
+from lineitem
+where l_quantity <= 25
+order by 1
+limit 100),
+
+-- Q6: LI-Qty-P6 (SharedScan) --
+(select l_orderkey, l_discount, l_tax, l_returnflag
+from lineitem
+where l_quantity <= 25
+order by 1
+limit 100),
+
+-- Q7: LI-Price-P1 (SharedScan) --
+(select l_orderkey, l_partkey, l_suppkey
+from lineitem
+where l_extendedprice <= 52950.00
+order by 1
+limit 100),
+
+-- Q8: LI-Price-P2 (SharedScan) --
+(select l_orderkey, l_suppkey, l_linenumber, l_quantity
+from lineitem
+where l_extendedprice <= 52950.00
+order by 1
+limit 100),
+
+-- Q9: LI-Price-P3 (SharedScan) --
+(select l_orderkey, l_linenumber, l_quantity
+from lineitem
+where l_extendedprice <= 52950.00
+order by 1
+limit 100),
+
+-- Q10: LI-Price-P4 (SharedScan) --
+(select l_orderkey, l_quantity, l_extendedprice, l_discount
+from lineitem
+where l_extendedprice <= 52950.00
+order by 1
+limit 100),
+
+-- Q11: LI-Price-P5 (SharedScan) --
+(select l_orderkey, l_extendedprice, l_discount
+from lineitem
+where l_extendedprice <= 52950.00
+order by 1
+limit 100),
+
+-- Q12: LI-Price-P6 (SharedScan) --
+(select l_orderkey, l_discount, l_tax, l_returnflag
+from lineitem
+where l_extendedprice <= 52950.00
+order by 1
+limit 100),
+
+-- Q13: LI-Disc-P1 (SharedScan) --
+(select l_orderkey, l_partkey, l_suppkey
+from lineitem
+where l_discount <= 0.05
+order by 1
+limit 100),
+
+-- Q14: LI-Disc-P2 (SharedScan) --
+(select l_orderkey, l_suppkey, l_linenumber, l_quantity
+from lineitem
+where l_discount <= 0.05
+order by 1
+limit 100),
+
+-- Q15: LI-Disc-P3 (SharedScan) --
+(select l_orderkey, l_linenumber, l_quantity
+from lineitem
+where l_discount <= 0.05
+order by 1
+limit 100),
+
+-- Q16: LI-Disc-P4 (SharedScan) --
+(select l_orderkey, l_quantity, l_extendedprice, l_discount
+from lineitem
+where l_discount <= 0.05
+order by 1
+limit 100),
+
+-- Q17: LI-Disc-P5 (SharedScan) --
+(select l_orderkey, l_extendedprice, l_discount
+from lineitem
+where l_discount <= 0.05
+order by 1
+limit 100),
+
+-- Q18: LI-Disc-P6 (SharedScan) --
+(select l_orderkey, l_discount, l_tax, l_returnflag
+from lineitem
+where l_discount <= 0.05
+order by 1
+limit 100),
+
+-- Q19: LI-Raw-P1 (SharedScan) --
+(select l_orderkey, l_partkey, l_suppkey
+from lineitem
+order by 1
+limit 100),
+
+-- Q20: LI-Raw-P2 (SharedScan) --
+(select l_orderkey, l_suppkey, l_linenumber, l_quantity
+from lineitem
+order by 1
+limit 100),
+
+-- Q21: LI-Raw-P3 (SharedScan) --
+(select l_orderkey, l_linenumber, l_quantity
+from lineitem
+order by 1
+limit 100),
+
+-- Q22: LI-Raw-P4 (SharedScan) --
+(select l_orderkey, l_quantity, l_extendedprice, l_discount
+from lineitem
+order by 1
+limit 100),
+
+-- Q23: LI-Raw-P5 (SharedScan) --
+(select l_orderkey, l_extendedprice, l_discount
+from lineitem
+order by 1
+limit 100),
+
+-- Q24: LI-Raw-P6 (SharedScan) --
+(select l_orderkey, l_discount, l_tax, l_returnflag
+from lineitem
+order by 1
+limit 100),
+
+-- Q25: ORD-Price-P1 (SharedScan) --
+(select o_orderkey, o_custkey, o_orderstatus
+from orders
+where o_totalprice <= 300400.00
+order by 1
+limit 100),
+
+-- Q26: ORD-Price-P2 (SharedScan) --
+(select o_orderkey, o_orderstatus, o_totalprice, o_orderdate
+from orders
+where o_totalprice <= 300400.00
+order by 1
+limit 100),
+
+-- Q27: ORD-Price-P3 (SharedScan) --
+(select o_orderkey, o_totalprice, o_orderdate
+from orders
+where o_totalprice <= 300400.00
+order by 1
+limit 100),
+
+-- Q28: ORD-Price-P4 (SharedScan) --
+(select o_orderkey, o_orderdate, o_orderpriority, o_clerk
+from orders
+where o_totalprice <= 300400.00
+order by 1
+limit 100),
+
+-- Q29: ORD-Price-P5 (SharedScan) --
+(select o_orderkey, o_orderpriority, o_clerk
+from orders
+where o_totalprice <= 300400.00
+order by 1
+limit 100),
+
+-- Q30: ORD-Price-P6 (SharedScan) --
+(select o_orderkey, o_clerk, o_shippriority, o_custkey
+from orders
+where o_totalprice <= 300400.00
+order by 1
+limit 100),
+
+-- Q31: ORD-Date-P1 (SharedScan) --
+(select o_orderkey, o_custkey, o_orderstatus
+from orders
+where o_orderdate <= date '1995-07-02'
+order by 1
+limit 100),
+
+-- Q32: ORD-Date-P2 (SharedScan) --
+(select o_orderkey, o_orderstatus, o_totalprice, o_orderdate
+from orders
+where o_orderdate <= date '1995-07-02'
+order by 1
+limit 100),
+
+-- Q33: ORD-Date-P3 (SharedScan) --
+(select o_orderkey, o_totalprice, o_orderdate
+from orders
+where o_orderdate <= date '1995-07-02'
+order by 1
+limit 100),
+
+-- Q34: ORD-Date-P4 (SharedScan) --
+(select o_orderkey, o_orderdate, o_orderpriority, o_clerk
+from orders
+where o_orderdate <= date '1995-07-02'
+order by 1
+limit 100),
+
+-- Q35: ORD-Date-P5 (SharedScan) --
+(select o_orderkey, o_orderpriority, o_clerk
+from orders
+where o_orderdate <= date '1995-07-02'
+order by 1
+limit 100),
+
+-- Q36: ORD-Date-P6 (SharedScan) --
+(select o_orderkey, o_clerk, o_shippriority, o_custkey
+from orders
+where o_orderdate <= date '1995-07-02'
+order by 1
+limit 100),
+
+-- Q37: ORD-Raw-P1 (SharedScan) --
+(select o_orderkey, o_custkey, o_orderstatus
+from orders
+order by 1
+limit 100),
+
+-- Q38: ORD-Raw-P2 (SharedScan) --
+(select o_orderkey, o_orderstatus, o_totalprice, o_orderdate
+from orders
+order by 1
+limit 100),
+
+-- Q39: ORD-Raw-P3 (SharedScan) --
+(select o_orderkey, o_totalprice, o_orderdate
+from orders
+order by 1
+limit 100),
+
+-- Q40: ORD-Raw-P4 (SharedScan) --
+(select o_orderkey, o_orderdate, o_orderpriority, o_clerk
+from orders
+order by 1
+limit 100),
+
+-- Q41: ORD-Raw-P5 (SharedScan) --
+(select o_orderkey, o_orderpriority, o_clerk
+from orders
+order by 1
+limit 100),
+
+-- Q42: ORD-Raw-P6 (SharedScan) --
+(select o_orderkey, o_clerk, o_shippriority, o_custkey
+from orders
+order by 1
+limit 100),
+
+-- Q43: Join-LO-Qty-P1 (SharedJoin) --
+(select l.l_orderkey, l.l_partkey, l.l_suppkey
+from lineitem l, orders o
+where l.l_orderkey = o.o_orderkey and l.l_quantity <= 25
+order by 1
+limit 100),
+
+-- Q44: Join-LO-Qty-P2 (SharedJoin) --
+(select l.l_orderkey, l.l_suppkey, l.l_linenumber, l.l_quantity
+from lineitem l, orders o
+where l.l_orderkey = o.o_orderkey and l.l_quantity <= 25
+order by 1
+limit 100),
+
+-- Q45: Join-LO-Qty-P3 (SharedJoin) --
+(select l.l_orderkey, l.l_linenumber, l.l_quantity
+from lineitem l, orders o
+where l.l_orderkey = o.o_orderkey and l.l_quantity <= 25
+order by 1
+limit 100),
+
+-- Q46: Join-LO-Qty-P4 (SharedJoin) --
+(select l.l_orderkey, l.l_quantity, l.l_extendedprice, l.l_discount
+from lineitem l, orders o
+where l.l_orderkey = o.o_orderkey and l.l_quantity <= 25
+order by 1
+limit 100),
+
+-- Q47: Join-LO-Qty-P5 (SharedJoin) --
+(select l.l_orderkey, l.l_extendedprice, l.l_discount
+from lineitem l, orders o
+where l.l_orderkey = o.o_orderkey and l.l_quantity <= 25
+order by 1
+limit 100),
+
+-- Q48: Join-LO-Qty-P6 (SharedJoin) --
+(select l.l_orderkey, l.l_discount, l.l_tax, l.l_returnflag
+from lineitem l, orders o
+where l.l_orderkey = o.o_orderkey and l.l_quantity <= 25
+order by 1
+limit 100),
+
+-- Q49: Join-LO-Price-P1 (SharedJoin) --
+(select l.l_orderkey, l.l_partkey, l.l_suppkey
+from lineitem l, orders o
+where l.l_orderkey = o.o_orderkey and l.l_extendedprice <= 52950.00
+order by 1
+limit 100),
+
+-- Q50: Join-LO-Price-P2 (SharedJoin) --
+(select l.l_orderkey, l.l_suppkey, l.l_linenumber, l.l_quantity
+from lineitem l, orders o
+where l.l_orderkey = o.o_orderkey and l.l_extendedprice <= 52950.00
+order by 1
+limit 100),
+
+-- Q51: Join-LO-Price-P3 (SharedJoin) --
+(select l.l_orderkey, l.l_linenumber, l.l_quantity
+from lineitem l, orders o
+where l.l_orderkey = o.o_orderkey and l.l_extendedprice <= 52950.00
+order by 1
+limit 100),
+
+-- Q52: Join-LO-Price-P4 (SharedJoin) --
+(select l.l_orderkey, l.l_quantity, l.l_extendedprice, l.l_discount
+from lineitem l, orders o
+where l.l_orderkey = o.o_orderkey and l.l_extendedprice <= 52950.00
+order by 1
+limit 100),
+
+-- Q53: Join-LO-Price-P5 (SharedJoin) --
+(select l.l_orderkey, l.l_extendedprice, l.l_discount
+from lineitem l, orders o
+where l.l_orderkey = o.o_orderkey and l.l_extendedprice <= 52950.00
+order by 1
+limit 100),
+
+-- Q54: Join-LO-Price-P6 (SharedJoin) --
+(select l.l_orderkey, l.l_discount, l.l_tax, l.l_returnflag
+from lineitem l, orders o
+where l.l_orderkey = o.o_orderkey and l.l_extendedprice <= 52950.00
+order by 1
+limit 100),
+
+-- Q55: Join-CO-Price-P1 (SharedJoin) --
+(select c.c_custkey, c.c_name, c.c_address
+from customer c, orders o
+where c.c_custkey = o.o_custkey and o.o_totalprice <= 300400.00
+order by 1
+limit 100),
+
+-- Q56: Join-CO-Price-P2 (SharedJoin) --
+(select c.c_custkey, c.c_address, c.c_nationkey, c.c_phone
+from customer c, orders o
+where c.c_custkey = o.o_custkey and o.o_totalprice <= 300400.00
+order by 1
+limit 100),
+
+-- Q57: Join-CO-Price-P3 (SharedJoin) --
+(select c.c_custkey, c.c_nationkey, c.c_phone
+from customer c, orders o
+where c.c_custkey = o.o_custkey and o.o_totalprice <= 300400.00
+order by 1
+limit 100),
+
+-- Q58: Join-CO-Price-P4 (SharedJoin) --
+(select c.c_custkey, c.c_phone, c.c_acctbal, c.c_mktsegment
+from customer c, orders o
+where c.c_custkey = o.o_custkey and o.o_totalprice <= 300400.00
+order by 1
+limit 100),
+
+-- Q59: Join-CO-Price-P5 (SharedJoin) --
+(select c.c_custkey, c.c_acctbal, c.c_mktsegment
+from customer c, orders o
+where c.c_custkey = o.o_custkey and o.o_totalprice <= 300400.00
+order by 1
+limit 100),
+
+-- Q60: Join-CO-Price-P6 (SharedJoin) --
+(select c.c_custkey, c.c_mktsegment, o.o_orderkey, o.o_custkey
+from customer c, orders o
+where c.c_custkey = o.o_custkey and o.o_totalprice <= 300400.00
+order by 1
+limit 100),
+
+-- Q61: Join-PL-P1 (SharedJoin) --
+(select p.p_partkey, p.p_name, p.p_mfgr
+from part p, lineitem l
+where p.p_partkey = l.l_partkey and l.l_quantity <= 25
+order by 1
+limit 100),
+
+-- Q62: Join-PL-P2 (SharedJoin) --
+(select p.p_partkey, p.p_mfgr, p.p_brand, p.p_type
+from part p, lineitem l
+where p.p_partkey = l.l_partkey and l.l_quantity <= 25
+order by 1
+limit 100),
+
+-- Q63: Join-PL-P3 (SharedJoin) --
+(select p.p_partkey, p.p_brand, p.p_type
+from part p, lineitem l
+where p.p_partkey = l.l_partkey and l.l_quantity <= 25
+order by 1
+limit 100),
+
+-- Q64: Join-PL-P4 (SharedJoin) --
+(select p.p_partkey, p.p_type, p.p_size, p.p_container
+from part p, lineitem l
+where p.p_partkey = l.l_partkey and l.l_quantity <= 25
+order by 1
+limit 100),
+
+-- Q65: Join-PL-P5 (SharedJoin) --
+(select p.p_partkey, p.p_size, p.p_container
+from part p, lineitem l
+where p.p_partkey = l.l_partkey and l.l_quantity <= 25
+order by 1
+limit 100),
+
+-- Q66: Agg-LI-Flag-A1 (SharedAgg) --
+(select l_returnflag, sum(l_quantity) as sum_quantity
+from lineitem
+where l_quantity <= 25
+group by l_returnflag
+order by l_returnflag),
+
+-- Q67: Agg-LI-Flag-A2 (SharedAgg) --
+(select l_returnflag, avg(l_extendedprice) as avg_extendedprice, count(*) as cnt_2
+from lineitem
+where l_quantity <= 25
+group by l_returnflag
+order by l_returnflag),
+
+-- Q68: Agg-LI-Flag-A3 (SharedAgg) --
+(select l_returnflag, count(*) as cnt_1, max(l_tax) as max_tax, min(l_quantity) as min_quantity
+from lineitem
+where l_quantity <= 25
+group by l_returnflag
+order by l_returnflag),
+
+-- Q69: Agg-LI-Flag-A4 (SharedAgg) --
+(select l_returnflag, max(l_tax) as max_tax
+from lineitem
+where l_quantity <= 25
+group by l_returnflag
+order by l_returnflag),
+
+-- Q70: Agg-LI-Flag-A5 (SharedAgg) --
+(select l_returnflag, min(l_quantity) as min_quantity, sum(l_extendedprice) as sum_extendedprice
+from lineitem
+where l_quantity <= 25
+group by l_returnflag
+order by l_returnflag),
+
+-- Q71: Agg-LI-Mode-A1 (SharedAgg) --
+(select l_shipmode, sum(l_quantity) as sum_quantity
+from lineitem
+where l_extendedprice <= 52950.00
+group by l_shipmode
+order by l_shipmode),
+
+-- Q72: Agg-LI-Mode-A2 (SharedAgg) --
+(select l_shipmode, avg(l_extendedprice) as avg_extendedprice, count(*) as cnt_2
+from lineitem
+where l_extendedprice <= 52950.00
+group by l_shipmode
+order by l_shipmode),
+
+-- Q73: Agg-LI-Mode-A3 (SharedAgg) --
+(select l_shipmode, count(*) as cnt_1, max(l_tax) as max_tax, min(l_quantity) as min_quantity
+from lineitem
+where l_extendedprice <= 52950.00
+group by l_shipmode
+order by l_shipmode),
+
+-- Q74: Agg-LI-Mode-A4 (SharedAgg) --
+(select l_shipmode, max(l_tax) as max_tax
+from lineitem
+where l_extendedprice <= 52950.00
+group by l_shipmode
+order by l_shipmode),
+
+-- Q75: Agg-LI-Mode-A5 (SharedAgg) --
+(select l_shipmode, min(l_quantity) as min_quantity, sum(l_extendedprice) as sum_extendedprice
+from lineitem
+where l_extendedprice <= 52950.00
+group by l_shipmode
+order by l_shipmode),
+
+-- Q76: Agg-ORD-Pri-A1 (SharedAgg) --
+(select o_orderpriority, sum(o_totalprice) as sum_totalprice
+from orders
+where o_totalprice <= 300400.00
+group by o_orderpriority
+order by o_orderpriority),
+
+-- Q77: Agg-ORD-Pri-A2 (SharedAgg) --
+(select o_orderpriority, avg(o_shippriority) as avg_shippriority, count(*) as cnt_2
+from orders
+where o_totalprice <= 300400.00
+group by o_orderpriority
+order by o_orderpriority),
+
+-- Q78: Agg-ORD-Pri-A3 (SharedAgg) --
+(select o_orderpriority, count(*) as cnt_1, max(o_shippriority) as max_shippriority, min(o_totalprice) as min_totalprice
+from orders
+where o_totalprice <= 300400.00
+group by o_orderpriority
+order by o_orderpriority),
+
+-- Q79: Agg-ORD-Pri-A4 (SharedAgg) --
+(select o_orderpriority, max(o_shippriority) as max_shippriority
+from orders
+where o_totalprice <= 300400.00
+group by o_orderpriority
+order by o_orderpriority),
+
+-- Q80: Agg-ORD-Pri-A5 (SharedAgg) --
+(select o_orderpriority, min(o_totalprice) as min_totalprice, sum(o_shippriority) as sum_shippriority
+from orders
+where o_totalprice <= 300400.00
+group by o_orderpriority
+order by o_orderpriority),
+
+-- Q81: Agg-ORD-Stat-A1 (SharedAgg) --
+(select o_orderstatus, sum(o_totalprice) as sum_totalprice
+from orders
+where o_orderdate <= date '1995-07-02'
+group by o_orderstatus
+order by o_orderstatus),
+
+-- Q82: Agg-ORD-Stat-A2 (SharedAgg) --
+(select o_orderstatus, avg(o_shippriority) as avg_shippriority, count(*) as cnt_2
+from orders
+where o_orderdate <= date '1995-07-02'
+group by o_orderstatus
+order by o_orderstatus),
+
+-- Q83: Agg-ORD-Stat-A3 (SharedAgg) --
+(select o_orderstatus, count(*) as cnt_1, max(o_shippriority) as max_shippriority, min(o_totalprice) as min_totalprice
+from orders
+where o_orderdate <= date '1995-07-02'
+group by o_orderstatus
+order by o_orderstatus),
+
+-- Q84: Agg-ORD-Stat-A4 (SharedAgg) --
+(select o_orderstatus, max(o_shippriority) as max_shippriority
+from orders
+where o_orderdate <= date '1995-07-02'
+group by o_orderstatus
+order by o_orderstatus),
+
+-- Q85: Agg-ORD-Stat-A5 (SharedAgg) --
+(select o_orderstatus, min(o_totalprice) as min_totalprice, sum(o_shippriority) as sum_shippriority
+from orders
+where o_orderdate <= date '1995-07-02'
+group by o_orderstatus
+order by o_orderstatus),
+
+-- Q86: JoinAgg-CO-Seg-A1 (SharedJoinAgg) --
+(select c.c_mktsegment, sum(o.o_totalprice) as sum_totalprice
+from customer c, orders o
+where c.c_custkey = o.o_custkey and o.o_totalprice <= 300400.00
+group by c.c_mktsegment
+order by c.c_mktsegment),
+
+-- Q87: JoinAgg-CO-Seg-A2 (SharedJoinAgg) --
+(select c.c_mktsegment, avg(o.o_shippriority) as avg_shippriority, count(*) as cnt_2
+from customer c, orders o
+where c.c_custkey = o.o_custkey and o.o_totalprice <= 300400.00
+group by c.c_mktsegment
+order by c.c_mktsegment),
+
+-- Q88: JoinAgg-CO-Seg-A3 (SharedJoinAgg) --
+(select c.c_mktsegment, count(*) as cnt_1, max(o.o_shippriority) as max_shippriority, min(o.o_totalprice) as min_totalprice
+from customer c, orders o
+where c.c_custkey = o.o_custkey and o.o_totalprice <= 300400.00
+group by c.c_mktsegment
+order by c.c_mktsegment),
+
+-- Q89: JoinAgg-CO-Seg-A4 (SharedJoinAgg) --
+(select c.c_mktsegment, max(o.o_shippriority) as max_shippriority
+from customer c, orders o
+where c.c_custkey = o.o_custkey and o.o_totalprice <= 300400.00
+group by c.c_mktsegment
+order by c.c_mktsegment),
+
+-- Q90: JoinAgg-CO-Seg-A5 (SharedJoinAgg) --
+(select c.c_mktsegment, min(o.o_totalprice) as min_totalprice, sum(o.o_shippriority) as sum_shippriority
+from customer c, orders o
+where c.c_custkey = o.o_custkey and o.o_totalprice <= 300400.00
+group by c.c_mktsegment
+order by c.c_mktsegment),
+
+-- Q91: JoinAgg-LO-Pri-A1 (SharedJoinAgg) --
+(select o.o_orderpriority, sum(l.l_quantity) as sum_quantity
+from lineitem l, orders o
+where l.l_orderkey = o.o_orderkey and l.l_quantity <= 25
+group by o.o_orderpriority
+order by o.o_orderpriority),
+
+-- Q92: JoinAgg-LO-Pri-A2 (SharedJoinAgg) --
+(select o.o_orderpriority, avg(l.l_extendedprice) as avg_extendedprice, count(*) as cnt_2
+from lineitem l, orders o
+where l.l_orderkey = o.o_orderkey and l.l_quantity <= 25
+group by o.o_orderpriority
+order by o.o_orderpriority),
+
+-- Q93: JoinAgg-LO-Pri-A3 (SharedJoinAgg) --
+(select o.o_orderpriority, count(*) as cnt_1, max(l.l_tax) as max_tax, min(l.l_quantity) as min_quantity
+from lineitem l, orders o
+where l.l_orderkey = o.o_orderkey and l.l_quantity <= 25
+group by o.o_orderpriority
+order by o.o_orderpriority),
+
+-- Q94: JoinAgg-LO-Pri-A4 (SharedJoinAgg) --
+(select o.o_orderpriority, max(l.l_tax) as max_tax
+from lineitem l, orders o
+where l.l_orderkey = o.o_orderkey and l.l_quantity <= 25
+group by o.o_orderpriority
+order by o.o_orderpriority),
+
+-- Q95: JoinAgg-LO-Pri-A5 (SharedJoinAgg) --
+(select o.o_orderpriority, min(l.l_quantity) as min_quantity, sum(l.l_extendedprice) as sum_extendedprice
+from lineitem l, orders o
+where l.l_orderkey = o.o_orderkey and l.l_quantity <= 25
+group by o.o_orderpriority
+order by o.o_orderpriority),
+
+-- Q96: JoinAgg-LO-Stat-A1 (SharedJoinAgg) --
+(select o.o_orderstatus, sum(l.l_quantity) as sum_quantity
+from lineitem l, orders o
+where l.l_orderkey = o.o_orderkey and l.l_extendedprice <= 52950.00
+group by o.o_orderstatus
+order by o.o_orderstatus),
+
+-- Q97: JoinAgg-LO-Stat-A2 (SharedJoinAgg) --
+(select o.o_orderstatus, avg(l.l_extendedprice) as avg_extendedprice, count(*) as cnt_2
+from lineitem l, orders o
+where l.l_orderkey = o.o_orderkey and l.l_extendedprice <= 52950.00
+group by o.o_orderstatus
+order by o.o_orderstatus),
+
+-- Q98: JoinAgg-LO-Stat-A3 (SharedJoinAgg) --
+(select o.o_orderstatus, count(*) as cnt_1, max(l.l_tax) as max_tax, min(l.l_quantity) as min_quantity
+from lineitem l, orders o
+where l.l_orderkey = o.o_orderkey and l.l_extendedprice <= 52950.00
+group by o.o_orderstatus
+order by o.o_orderstatus),
+
+-- Q99: JoinAgg-LO-Stat-A4 (SharedJoinAgg) --
+(select o.o_orderstatus, max(l.l_tax) as max_tax
+from lineitem l, orders o
+where l.l_orderkey = o.o_orderkey and l.l_extendedprice <= 52950.00
+group by o.o_orderstatus
+order by o.o_orderstatus),
+
+-- Q100: JoinAgg-LO-Stat-A5 (SharedJoinAgg) --
+(select o.o_orderstatus, min(l.l_quantity) as min_quantity, sum(l.l_extendedprice) as sum_extendedprice
+from lineitem l, orders o
+where l.l_orderkey = o.o_orderkey and l.l_extendedprice <= 52950.00
+group by o.o_orderstatus
+order by o.o_orderstatus)
+);
+!plan
+!ok
+
+# End generated file

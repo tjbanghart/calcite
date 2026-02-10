@@ -16,6 +16,7 @@
  */
 package org.apache.calcite.rel.rules;
 
+import org.apache.calcite.plan.RelDigest;
 import org.apache.calcite.plan.RelOptRuleCall;
 import org.apache.calcite.plan.RelOptUtil;
 import org.apache.calcite.plan.RelRule;
@@ -88,7 +89,8 @@ public class CombineSharedComponentsRule extends RelRule<CombineSharedComponents
     }
 
     // Map to track which shared component digest gets which spool
-    Map<String, LogicalTableSpool> digestToSpool = new HashMap<>();
+    // Use RelDigest as key to compare structural equivalence (deepEquals)
+    Map<RelDigest, LogicalTableSpool> digestToSpool = new HashMap<>();
     int spoolCounter = 0;
 
     // Get metadata query for row count estimation
@@ -119,7 +121,7 @@ public class CombineSharedComponentsRule extends RelRule<CombineSharedComponents
           );
 
       // Use digest (structural signature) instead of object identity
-      digestToSpool.put(sharedComponent.getDigest(), spool);
+      digestToSpool.put(sharedComponent.getRelDigest(), spool);
     }
 
     combine = combine.accept(
@@ -130,14 +132,14 @@ public class CombineSharedComponentsRule extends RelRule<CombineSharedComponents
     call.transformTo(combine);
   }
 
-  private static RelHomogeneousShuttle getReplacer(Map<String, LogicalTableSpool> digestToSpool) {
-    Set<String> producers = new HashSet<>();
+  private static RelHomogeneousShuttle getReplacer(Map<RelDigest, LogicalTableSpool> digestToSpool) {
+    Set<RelDigest> producers = new HashSet<>();
 
     return new RelHomogeneousShuttle() {
       @Override
       public RelNode visit(RelNode node) {
         // Check if this node's digest matches any of our shared components
-        String nodeDigest = node.getDigest();
+        RelDigest nodeDigest = node.getRelDigest();
         if (digestToSpool.containsKey(nodeDigest)) {
           LogicalTableSpool spool = digestToSpool.get(nodeDigest);
 

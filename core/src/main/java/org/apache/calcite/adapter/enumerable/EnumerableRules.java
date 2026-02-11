@@ -195,6 +195,12 @@ public class EnumerableRules {
   public static final EnumerableMatchRule ENUMERABLE_MATCH_RULE =
       EnumerableMatchRule.DEFAULT_CONFIG.toRule(EnumerableMatchRule.class);
 
+  /** Rule that converts a {@link org.apache.calcite.rel.rules.MultiJoin} to an
+   * {@link EnumerableWCOJ} (Worst-Case Optimal Join). */
+  @Experimental
+  public static final RelOptRule ENUMERABLE_WCOJ_RULE =
+      EnumerableWCOJRule.DEFAULT_CONFIG.toRule(EnumerableWCOJRule.class);
+
   /** Rule to convert a {@link LogicalAggregate}
    * to an {@link EnumerableSortedAggregate}. */
   public static final EnumerableSortedAggregateRule ENUMERABLE_SORTED_AGGREGATE_RULE =

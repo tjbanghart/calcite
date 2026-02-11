@@ -101,6 +101,16 @@ public final class CalciteSystemProperty<T> {
   public static final CalciteSystemProperty<Boolean> ENABLE_STREAM =
       booleanProperty("calcite.enable.stream", true);
 
+  /**
+   * Whether Worst-Case Optimal Join (WCOJ) is enabled.
+   *
+   * <p>WCOJ provides runtime guarantees proportional to worst-case output size,
+   * particularly beneficial for cyclic queries (e.g., triangle queries) that
+   * produce large intermediate results with traditional binary joins.
+   */
+  public static final CalciteSystemProperty<Boolean> ENABLE_WCOJ =
+      booleanProperty("calcite.enable.wcoj", false);
+
   /** Whether RexNode digest should be normalized (e.g. call operands ordered).
    *
    * <p>Normalization helps to treat $0=$1 and $1=$0 expressions equal, thus it

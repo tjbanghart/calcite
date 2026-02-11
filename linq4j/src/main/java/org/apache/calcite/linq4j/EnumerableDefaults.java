@@ -4963,4 +4963,357 @@ public abstract class EnumerableDefaults {
       }
     };
   }
+
+  /**
+   * Performs a Worst-Case Optimal Join (WCOJ) on multiple inputs.
+   *
+   * <p>WCOJ provides runtime guarantees proportional to worst-case output size,
+   * particularly beneficial for cyclic queries (e.g., triangle queries) that
+   * produce large intermediate results with traditional binary joins.
+   *
+   * <p>This implementation uses the "Adopt Probing" technique from Freitag et al.
+   *
+   * @param inputs list of input enumerables
+   * @param joinKeyIndices for each input, which field indices are join keys
+   * @param variableToInputs mapping from join variable index to list of (inputIndex, fieldIndex) pairs
+   * @param resultSelector function to construct result rows from matched input rows
+   * @param <TResult> the result row type
+   * @return an enumerable of joined results
+   */
+  public static <TResult> Enumerable<TResult> wcoj(
+      List<Enumerable<Object[]>> inputs,
+      List<int[]> joinKeyIndices,
+      int[][] variableToInputs,
+      Function1<Object[][], TResult> resultSelector) {
+
+    return new AbstractEnumerable<TResult>() {
+      @Override public Enumerator<TResult> enumerator() {
+        return new WCOJEnumerator<>(inputs, joinKeyIndices, variableToInputs, resultSelector);
+      }
+    };
+  }
+
+  /**
+   * Enumerator for Worst-Case Optimal Join (WCOJ).
+   *
+   * <p>Implements the adopt probing algorithm:
+   * <ol>
+   *   <li>Build hash tries for each input</li>
+   *   <li>Iterate over join variables in global order</li>
+   *   <li>For each variable, find intersection across all participating relations</li>
+   *   <li>Use trie lookups to efficiently navigate</li>
+   * </ol>
+   *
+   * @param <TResult> the result type
+   */
+  private static class WCOJEnumerator<TResult> implements Enumerator<TResult> {
+    private final int[][] variableToInputs;
+    private final Function1<Object[][], TResult> resultSelector;
+    private final int numVariables;
+    private final int numInputs;
+
+    // Hash tries indexed by variable
+    // For each variable v, tries.get(v) contains tries for each input that has that variable
+    private final List<List<HashTrie<Object[]>>> triesPerVariable;
+
+    // Current state of join computation
+    private final Object[] currentValues;  // Current binding for each variable
+    private final List<List<Object>> candidateValues;  // Available values for each variable
+    private final int[] candidateIndices;  // Current index into candidate values
+
+    // Iterator state for producing results
+    private @Nullable Iterator<Object[][]> matchIterator;
+
+    // State for backtracking
+    private int currentLevel;
+    private boolean initialized;
+    private boolean finished;
+    private @Nullable TResult current;
+
+    WCOJEnumerator(
+        List<Enumerable<Object[]>> inputs,
+        List<int[]> joinKeyIndices,
+        int[][] variableToInputs,
+        Function1<Object[][], TResult> resultSelector) {
+      this.variableToInputs = variableToInputs;
+      this.resultSelector = resultSelector;
+      this.numVariables = variableToInputs.length;
+      this.numInputs = inputs.size();
+
+      this.currentValues = new Object[numVariables];
+      this.candidateValues = new ArrayList<>(numVariables);
+      this.candidateIndices = new int[numVariables];
+      this.currentLevel = 0;
+      this.initialized = false;
+      this.finished = numVariables == 0 || numInputs == 0;
+
+      for (int i = 0; i < numVariables; i++) {
+        candidateValues.add(new ArrayList<>());
+      }
+
+      // Build hash tries for each input, keyed by each variable's field
+      this.triesPerVariable = buildTries(inputs, variableToInputs);
+    }
+
+    /**
+     * Builds hash tries for efficient WCOJ lookups.
+     *
+     * <p>For each variable, we build tries on the inputs that participate in that variable.
+     * Each trie is single-level, keyed by the field corresponding to that variable.
+     */
+    private List<List<HashTrie<Object[]>>> buildTries(
+        List<Enumerable<Object[]>> inputs,
+        int[][] variableToInputs) {
+
+      List<List<HashTrie<Object[]>>> result = new ArrayList<>(numVariables);
+
+      for (int varIdx = 0; varIdx < numVariables; varIdx++) {
+        int[] inputsForVar = variableToInputs[varIdx];
+        List<HashTrie<Object[]>> triesForVar = new ArrayList<>();
+
+        for (int i = 0; i < inputsForVar.length; i += 2) {
+          final int inputIdx = inputsForVar[i];
+          final int fieldIdx = inputsForVar[i + 1];
+
+          // Build a single-level trie for this input on this field
+          List<Function1<Object[], @Nullable Object>> extractors =
+              Collections.singletonList(row -> row[fieldIdx]);
+          HashTrie<Object[]> trie = HashTrie.build(inputs.get(inputIdx), extractors);
+          triesForVar.add(trie);
+        }
+
+        result.add(triesForVar);
+      }
+
+      return result;
+    }
+
+    /**
+     * Initializes candidate values at the given level by intersecting
+     * values from all participating tries.
+     */
+    private void initCandidatesAtLevel(int level) {
+      List<Object> candidates = candidateValues.get(level);
+      candidates.clear();
+      candidateIndices[level] = -1;  // Will be incremented to 0 on first advance
+
+      List<HashTrie<Object[]>> triesForVar = triesPerVariable.get(level);
+      if (triesForVar.isEmpty()) {
+        return;
+      }
+
+      // Get values from first trie
+      HashTrie<Object[]> firstTrie = triesForVar.get(0);
+      Set<Object> intersection = new HashSet<>();
+      for (Object key : firstTrie.getKeysAtLevel(0, Collections.emptyList())) {
+        intersection.add(key);
+      }
+
+      // Intersect with other tries
+      for (int i = 1; i < triesForVar.size(); i++) {
+        HashTrie<Object[]> trie = triesForVar.get(i);
+        Set<Object> trieKeys = new HashSet<>();
+        for (Object key : trie.getKeysAtLevel(0, Collections.emptyList())) {
+          trieKeys.add(key);
+        }
+        intersection.retainAll(trieKeys);
+        if (intersection.isEmpty()) {
+          return;
+        }
+      }
+
+      candidates.addAll(intersection);
+    }
+
+    /**
+     * Advances to the next value at the given level.
+     * Returns true if successful, false if exhausted.
+     */
+    private boolean advanceAtLevel(int level) {
+      List<Object> candidates = candidateValues.get(level);
+      int idx = candidateIndices[level] + 1;
+
+      if (idx < candidates.size()) {
+        candidateIndices[level] = idx;
+        currentValues[level] = candidates.get(idx);
+        return true;
+      }
+
+      return false;
+    }
+
+    /**
+     * Collects matching rows from each input for the current variable bindings.
+     */
+    private List<Object[][]> collectMatches() {
+      List<Object[][]> matches = new ArrayList<>();
+
+      // For each input, find rows that match current variable bindings
+      List<List<Object[]>> rowsPerInput = new ArrayList<>(numInputs);
+      for (int i = 0; i < numInputs; i++) {
+        rowsPerInput.add(new ArrayList<>());
+      }
+
+      // Use tries to find matching rows for each input
+      for (int varIdx = 0; varIdx < numVariables; varIdx++) {
+        Object value = currentValues[varIdx];
+        List<HashTrie<Object[]>> triesForVar = triesPerVariable.get(varIdx);
+        int[] inputsForVar = variableToInputs[varIdx];
+
+        for (int i = 0; i < inputsForVar.length; i += 2) {
+          int inputIdx = inputsForVar[i];
+          int trieIdx = i / 2;
+          int fieldIdx = inputsForVar[i + 1];
+
+          if (rowsPerInput.get(inputIdx).isEmpty()) {
+            // First variable for this input - initialize rows from trie
+            HashTrie<Object[]> trie = triesForVar.get(trieIdx);
+            for (Object[] row : trie.probe(Collections.singletonList(value))) {
+              rowsPerInput.get(inputIdx).add(row);
+            }
+          } else {
+            // Filter existing rows based on this variable's value
+            List<Object[]> filtered = new ArrayList<>();
+            for (Object[] row : rowsPerInput.get(inputIdx)) {
+              if (Objects.equals(row[fieldIdx], value)) {
+                filtered.add(row);
+              }
+            }
+            rowsPerInput.set(inputIdx, filtered);
+          }
+        }
+      }
+
+      // Check if any input has no matching rows
+      for (List<Object[]> rows : rowsPerInput) {
+        if (rows.isEmpty()) {
+          return Collections.emptyList();
+        }
+      }
+
+      // Generate cross product of matching rows
+      generateCrossProduct(rowsPerInput, 0, new Object[numInputs][], matches);
+
+      return matches;
+    }
+
+    private void generateCrossProduct(
+        List<List<Object[]>> rowsPerInput,
+        int inputIdx,
+        Object[][] current,
+        List<Object[][]> results) {
+
+      if (inputIdx == numInputs) {
+        results.add(current.clone());
+        return;
+      }
+
+      for (Object[] row : rowsPerInput.get(inputIdx)) {
+        current[inputIdx] = row;
+        generateCrossProduct(rowsPerInput, inputIdx + 1, current, results);
+      }
+    }
+
+    @Override public TResult current() {
+      if (current == null) {
+        throw new NoSuchElementException();
+      }
+      return current;
+    }
+
+    @Override public boolean moveNext() {
+      while (!finished) {
+        // If we have pending matches, return the next one
+        if (matchIterator != null && matchIterator.hasNext()) {
+          Object[][] match = matchIterator.next();
+          current = resultSelector.apply(match);
+          return true;
+        }
+        matchIterator = null;
+
+        // Initialize on first call
+        if (!initialized) {
+          initialized = true;
+          // Initialize all levels
+          for (int level = 0; level < numVariables; level++) {
+            initCandidatesAtLevel(level);
+            if (!advanceAtLevel(level)) {
+              // No candidates at this level - finished
+              finished = true;
+              break;
+            }
+          }
+          if (!finished) {
+            // Collect matches for initial binding
+            currentLevel = numVariables;
+            List<Object[][]> matches = collectMatches();
+            if (!matches.isEmpty()) {
+              matchIterator = matches.iterator();
+              continue;
+            }
+          }
+        }
+
+        // If at max level, we've already processed matches, so backtrack
+        if (currentLevel == numVariables) {
+          currentLevel--;
+        }
+
+        // Find next valid assignment by backtracking and advancing
+        while (currentLevel >= 0) {
+          if (advanceAtLevel(currentLevel)) {
+            // Successfully advanced at current level
+            // Move forward through remaining levels
+            currentLevel++;
+            while (currentLevel < numVariables) {
+              initCandidatesAtLevel(currentLevel);
+              if (!advanceAtLevel(currentLevel)) {
+                // No candidates at this level, backtrack
+                break;
+              }
+              currentLevel++;
+            }
+
+            if (currentLevel == numVariables) {
+              // Successfully bound all variables
+              List<Object[][]> matches = collectMatches();
+              if (!matches.isEmpty()) {
+                matchIterator = matches.iterator();
+                break;  // Exit inner while to check matchIterator
+              }
+              // No matches for this binding, continue searching
+              currentLevel--;
+            }
+          } else {
+            // Exhausted candidates at this level, backtrack
+            currentLevel--;
+          }
+        }
+
+        if (currentLevel < 0) {
+          finished = true;
+        }
+      }
+
+      current = null;
+      return false;
+    }
+
+    @Override public void reset() {
+      currentLevel = 0;
+      initialized = false;
+      finished = numVariables == 0 || numInputs == 0;
+      matchIterator = null;
+      current = null;
+      Arrays.fill(candidateIndices, -1);
+      Arrays.fill(currentValues, null);
+      for (List<Object> candidates : candidateValues) {
+        candidates.clear();
+      }
+    }
+
+    @Override public void close() {
+      // No resources to close
+    }
+  }
 }

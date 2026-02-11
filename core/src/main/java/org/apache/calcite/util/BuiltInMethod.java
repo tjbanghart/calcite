@@ -246,6 +246,8 @@ public enum BuiltInMethod {
       EqualityComparer.class, Predicate2.class),
   NESTED_LOOP_JOIN(EnumerableDefaults.class, "nestedLoopJoin", Enumerable.class,
       Enumerable.class, Predicate2.class, Function2.class, JoinType.class),
+  WCOJ(EnumerableDefaults.class, "wcoj", List.class, List.class, int[][].class,
+      Function1.class),
   CORRELATE_JOIN(ExtendedEnumerable.class, "correlateJoin",
       JoinType.class, Function1.class, Function2.class),
   CORRELATE_BATCH_JOIN(EnumerableDefaults.class, "correlateBatchJoin",

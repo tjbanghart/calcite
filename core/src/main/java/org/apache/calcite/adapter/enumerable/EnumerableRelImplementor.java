@@ -67,6 +67,8 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import org.checkerframework.checker.nullness.qual.Nullable;
+
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -85,6 +87,9 @@ public class EnumerableRelImplementor extends JavaRelImplementor {
   // A combination of IdentityHashMap + LinkedHashMap to ensure deterministic order
   private final Map<Equivalence.Wrapper<Object>, ParameterExpression> stashedParameters =
       new LinkedHashMap<>();
+
+  /** Expression referencing a shared TrieCache, set by Combine for its WCOJ children. */
+  private @Nullable Expression trieCacheExpr;
 
   @SuppressWarnings("methodref.receiver.bound.invalid")
   protected final Function1<String, RexToLixTranslator.InputGetter> allCorrelateVariables =
@@ -476,6 +481,29 @@ public class EnumerableRelImplementor extends JavaRelImplementor {
     assert corrVars.containsKey(name) : "Correlation variable " + name
         + " should be defined";
     return corrVars.get(name);
+  }
+
+  /**
+   * Registers a shared TrieCache expression. Called by Combine before
+   * visiting WCOJ children, so that WCOJ operators can share tries.
+   */
+  public void setTrieCacheExpr(Expression trieCacheExpr) {
+    this.trieCacheExpr = trieCacheExpr;
+  }
+
+  /**
+   * Returns the shared TrieCache expression, or null if not in a Combine context.
+   */
+  public @Nullable Expression getTrieCacheExpr() {
+    return trieCacheExpr;
+  }
+
+  /**
+   * Clears the shared TrieCache expression. Called by Combine after
+   * visiting all children.
+   */
+  public void clearTrieCacheExpr() {
+    this.trieCacheExpr = null;
   }
 
   public EnumerableRel.Result result(PhysType physType, BlockStatement block) {

@@ -41,6 +41,7 @@ import org.apache.calcite.linq4j.JoinType;
 import org.apache.calcite.linq4j.Linq4j;
 import org.apache.calcite.linq4j.MemoryFactory;
 import org.apache.calcite.linq4j.QueryProvider;
+import org.apache.calcite.linq4j.TrieCache;
 import org.apache.calcite.linq4j.Queryable;
 import org.apache.calcite.linq4j.function.EqualityComparer;
 import org.apache.calcite.linq4j.function.Function0;
@@ -248,6 +249,8 @@ public enum BuiltInMethod {
       Enumerable.class, Predicate2.class, Function2.class, JoinType.class),
   WCOJ(EnumerableDefaults.class, "wcoj", List.class, List.class, int[][].class,
       Function1.class),
+  WCOJ_WITH_CACHE(EnumerableDefaults.class, "wcoj", List.class, List.class,
+      int[][].class, Function1.class, TrieCache.class),
   CORRELATE_JOIN(ExtendedEnumerable.class, "correlateJoin",
       JoinType.class, Function1.class, Function2.class),
   CORRELATE_BATCH_JOIN(EnumerableDefaults.class, "correlateBatchJoin",

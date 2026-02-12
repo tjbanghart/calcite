@@ -228,13 +228,27 @@ public class EnumerableWCOJ extends AbstractRelNode implements EnumerableRel {
     final Expression resultSelector = buildResultSelector(
         implementor, physType, inputPhysTypes, inputRows_);
 
-    // Generate the call to EnumerableDefaults.wcoj
-    final Expression wcojCall = Expressions.call(
-        BuiltInMethod.WCOJ.method,
-        inputsList,
-        joinKeyIndicesList,
-        variableToInputsArray,
-        resultSelector);
+    // Generate the call to EnumerableDefaults.wcoj.
+    // If a shared TrieCache is available (from a parent Combine), use the
+    // cache-aware overload so tries can be reused across WCOJ operators.
+    final Expression trieCacheExpr = implementor.getTrieCacheExpr();
+    final Expression wcojCall;
+    if (trieCacheExpr != null) {
+      wcojCall = Expressions.call(
+          BuiltInMethod.WCOJ_WITH_CACHE.method,
+          inputsList,
+          joinKeyIndicesList,
+          variableToInputsArray,
+          resultSelector,
+          trieCacheExpr);
+    } else {
+      wcojCall = Expressions.call(
+          BuiltInMethod.WCOJ.method,
+          inputsList,
+          joinKeyIndicesList,
+          variableToInputsArray,
+          resultSelector);
+    }
 
     return implementor.result(physType, builder.append(wcojCall).toBlock());
   }

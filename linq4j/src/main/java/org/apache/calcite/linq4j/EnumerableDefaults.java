@@ -4985,10 +4985,24 @@ public abstract class EnumerableDefaults {
       List<int[]> joinKeyIndices,
       int[][] variableToInputs,
       Function1<Object[][], TResult> resultSelector) {
+    return wcoj(inputs, joinKeyIndices, variableToInputs, resultSelector, null);
+  }
+
+  /**
+   * Worst-Case Optimal Join with an optional trie cache for sharing tries
+   * across multiple WCOJ operators (e.g., within a Combine).
+   */
+  public static <TResult> Enumerable<TResult> wcoj(
+      List<Enumerable<Object[]>> inputs,
+      List<int[]> joinKeyIndices,
+      int[][] variableToInputs,
+      Function1<Object[][], TResult> resultSelector,
+      @Nullable TrieCache trieCache) {
 
     return new AbstractEnumerable<TResult>() {
       @Override public Enumerator<TResult> enumerator() {
-        return new WCOJEnumerator<>(inputs, joinKeyIndices, variableToInputs, resultSelector);
+        return new WCOJEnumerator<>(inputs, joinKeyIndices, variableToInputs,
+            resultSelector, trieCache);
       }
     };
   }
@@ -5012,9 +5026,21 @@ public abstract class EnumerableDefaults {
     private final int numVariables;
     private final int numInputs;
 
-    // Hash tries indexed by variable
-    // For each variable v, tries.get(v) contains tries for each input that has that variable
-    private final List<List<HashTrie<Object[]>>> triesPerVariable;
+    // Multi-level trie per input, with levels following the global variable order.
+    // triePerInput[i] indexes input i on the variables that touch it.
+    private final List<HashTrie<Object[]>> triePerInput;
+
+    // For each input, the ordered list of global variable indices that index it.
+    // inputVarOrder[i] = [varIdx0, varIdx1, ...] in ascending order.
+    private final int[][] inputVarOrder;
+
+    // For each (globalVarIdx, inputIdx) pair that participates:
+    //   localTrieLevel[inputIdx][globalVarIdx] = the trie level in triePerInput[inputIdx]
+    // -1 if this input doesn't participate in this variable.
+    private final int[][] localTrieLevel;
+
+    // For each global variable, list of input indices that participate.
+    private final List<List<Integer>> inputsForVariable;
 
     // Current state of join computation
     private final Object[] currentValues;  // Current binding for each variable
@@ -5034,7 +5060,8 @@ public abstract class EnumerableDefaults {
         List<Enumerable<Object[]>> inputs,
         List<int[]> joinKeyIndices,
         int[][] variableToInputs,
-        Function1<Object[][], TResult> resultSelector) {
+        Function1<Object[][], TResult> resultSelector,
+        @Nullable TrieCache trieCache) {
       this.variableToInputs = variableToInputs;
       this.resultSelector = resultSelector;
       this.numVariables = variableToInputs.length;
@@ -5051,78 +5078,146 @@ public abstract class EnumerableDefaults {
         candidateValues.add(new ArrayList<>());
       }
 
-      // Build hash tries for each input, keyed by each variable's field
-      this.triesPerVariable = buildTries(inputs, variableToInputs);
+      // Compute per-input variable ordering and mappings.
+      // inputVarOrder[i] = sorted list of global var indices touching input i
+      // inputFieldForVar[i][localLevel] = field index in input i for that var
+      this.inputVarOrder = new int[numInputs][];
+      int[][] inputFieldForVar = new int[numInputs][];
+      this.localTrieLevel = new int[numInputs][numVariables];
+      this.inputsForVariable = new ArrayList<>(numVariables);
+
+      // Initialize localTrieLevel to -1
+      for (int i = 0; i < numInputs; i++) {
+        Arrays.fill(localTrieLevel[i], -1);
+      }
+
+      // Initialize inputsForVariable
+      for (int v = 0; v < numVariables; v++) {
+        inputsForVariable.add(new ArrayList<>());
+      }
+
+      // First pass: collect (varIdx, fieldIdx) pairs per input
+      @SuppressWarnings("unchecked")
+      List<int[]>[] inputVarFieldPairs = new List[numInputs];
+      for (int i = 0; i < numInputs; i++) {
+        inputVarFieldPairs[i] = new ArrayList<>();
+      }
+
+      for (int varIdx = 0; varIdx < numVariables; varIdx++) {
+        int[] mapping = variableToInputs[varIdx];
+        for (int i = 0; i < mapping.length; i += 2) {
+          int inputIdx = mapping[i];
+          int fieldIdx = mapping[i + 1];
+          inputVarFieldPairs[inputIdx].add(new int[]{varIdx, fieldIdx});
+          inputsForVariable.get(varIdx).add(inputIdx);
+        }
+      }
+
+      // Build per-input structures: varOrder is already in global var order
+      // since we iterate varIdx 0..N-1
+      for (int inputIdx = 0; inputIdx < numInputs; inputIdx++) {
+        List<int[]> pairs = inputVarFieldPairs[inputIdx];
+        inputVarOrder[inputIdx] = new int[pairs.size()];
+        inputFieldForVar[inputIdx] = new int[pairs.size()];
+        for (int localLevel = 0; localLevel < pairs.size(); localLevel++) {
+          int[] pair = pairs.get(localLevel);
+          inputVarOrder[inputIdx][localLevel] = pair[0]; // global var idx
+          inputFieldForVar[inputIdx][localLevel] = pair[1]; // field idx
+          localTrieLevel[inputIdx][pair[0]] = localLevel;
+        }
+      }
+
+      // Build multi-level tries per input
+      this.triePerInput = buildMultiLevelTries(inputs, inputFieldForVar, trieCache);
     }
 
     /**
-     * Builds hash tries for efficient WCOJ lookups.
+     * Builds one multi-level HashTrie per input.
      *
-     * <p>For each variable, we build tries on the inputs that participate in that variable.
-     * Each trie is single-level, keyed by the field corresponding to that variable.
+     * <p>Each trie's levels correspond to the global variables that touch
+     * that input, in global variable order. This enables prefix-aware candidate
+     * pruning: when binding variable K, we can query the trie with a prefix
+     * of all prior bindings relevant to that input, narrowing candidates.
      */
-    private List<List<HashTrie<Object[]>>> buildTries(
+    private List<HashTrie<Object[]>> buildMultiLevelTries(
         List<Enumerable<Object[]>> inputs,
-        int[][] variableToInputs) {
+        int[][] inputFieldForVar,
+        @Nullable TrieCache trieCache) {
 
-      List<List<HashTrie<Object[]>>> result = new ArrayList<>(numVariables);
+      List<HashTrie<Object[]>> result = new ArrayList<>(numInputs);
 
-      for (int varIdx = 0; varIdx < numVariables; varIdx++) {
-        int[] inputsForVar = variableToInputs[varIdx];
-        List<HashTrie<Object[]>> triesForVar = new ArrayList<>();
-
-        for (int i = 0; i < inputsForVar.length; i += 2) {
-          final int inputIdx = inputsForVar[i];
-          final int fieldIdx = inputsForVar[i + 1];
-
-          // Build a single-level trie for this input on this field
-          List<Function1<Object[], @Nullable Object>> extractors =
-              Collections.singletonList(row -> row[fieldIdx]);
-          HashTrie<Object[]> trie = HashTrie.build(inputs.get(inputIdx), extractors);
-          triesForVar.add(trie);
+      for (int inputIdx = 0; inputIdx < numInputs; inputIdx++) {
+        int[] fieldIndices = inputFieldForVar[inputIdx];
+        if (fieldIndices.length == 0) {
+          // Input not involved in any join variable (shouldn't happen)
+          result.add(HashTrie.build(inputs.get(inputIdx),
+              Collections.singletonList(row -> row[0])));
+          continue;
         }
 
-        result.add(triesForVar);
+        // Build key extractors for each level of this input's trie
+        List<Function1<Object[], @Nullable Object>> extractors = new ArrayList<>();
+        for (int fieldIdx : fieldIndices) {
+          final int f = fieldIdx;
+          extractors.add(row -> row[f]);
+        }
+        result.add(HashTrie.build(inputs.get(inputIdx), extractors));
       }
 
       return result;
     }
 
     /**
-     * Initializes candidate values at the given level by intersecting
-     * values from all participating tries.
+     * Initializes candidate values at the given global variable level.
+     *
+     * <p>For each input that participates in this variable, queries its
+     * multi-level trie using the prefix of all prior variable bindings
+     * that are relevant to that input. The candidate set is the intersection
+     * across all participating inputs.
      */
     private void initCandidatesAtLevel(int level) {
       List<Object> candidates = candidateValues.get(level);
       candidates.clear();
-      candidateIndices[level] = -1;  // Will be incremented to 0 on first advance
+      candidateIndices[level] = -1;
 
-      List<HashTrie<Object[]>> triesForVar = triesPerVariable.get(level);
-      if (triesForVar.isEmpty()) {
+      List<Integer> participatingInputs = inputsForVariable.get(level);
+      if (participatingInputs.isEmpty()) {
         return;
       }
 
-      // Get values from first trie
-      HashTrie<Object[]> firstTrie = triesForVar.get(0);
-      Set<Object> intersection = new HashSet<>();
-      for (Object key : firstTrie.getKeysAtLevel(0, Collections.emptyList())) {
-        intersection.add(key);
+      Set<Object> intersection = null;
+
+      for (int inputIdx : participatingInputs) {
+        HashTrie<Object[]> trie = triePerInput.get(inputIdx);
+        int localLevel = localTrieLevel[inputIdx][level];
+
+        // Build the prefix: bindings for all global variables < level
+        // that also touch this input
+        List<Object> prefix = new ArrayList<>();
+        for (int priorLocal = 0; priorLocal < localLevel; priorLocal++) {
+          int priorGlobalVar = inputVarOrder[inputIdx][priorLocal];
+          prefix.add(currentValues[priorGlobalVar]);
+        }
+
+        // Get keys at this level with the prefix
+        Set<Object> keys = new HashSet<>();
+        for (Object key : trie.getKeysAtLevel(localLevel, prefix)) {
+          keys.add(key);
+        }
+
+        if (intersection == null) {
+          intersection = keys;
+        } else {
+          intersection.retainAll(keys);
+          if (intersection.isEmpty()) {
+            return;
+          }
+        }
       }
 
-      // Intersect with other tries
-      for (int i = 1; i < triesForVar.size(); i++) {
-        HashTrie<Object[]> trie = triesForVar.get(i);
-        Set<Object> trieKeys = new HashSet<>();
-        for (Object key : trie.getKeysAtLevel(0, Collections.emptyList())) {
-          trieKeys.add(key);
-        }
-        intersection.retainAll(trieKeys);
-        if (intersection.isEmpty()) {
-          return;
-        }
+      if (intersection != null) {
+        candidates.addAll(intersection);
       }
-
-      candidates.addAll(intersection);
     }
 
     /**
@@ -5144,51 +5239,34 @@ public abstract class EnumerableDefaults {
 
     /**
      * Collects matching rows from each input for the current variable bindings.
+     *
+     * <p>Uses multi-level trie probing: for each input, builds the full
+     * prefix of bound variable values and probes the trie to get exactly
+     * the matching rows, without post-filtering.
      */
     private List<Object[][]> collectMatches() {
       List<Object[][]> matches = new ArrayList<>();
 
-      // For each input, find rows that match current variable bindings
       List<List<Object[]>> rowsPerInput = new ArrayList<>(numInputs);
-      for (int i = 0; i < numInputs; i++) {
-        rowsPerInput.add(new ArrayList<>());
-      }
+      for (int inputIdx = 0; inputIdx < numInputs; inputIdx++) {
+        HashTrie<Object[]> trie = triePerInput.get(inputIdx);
 
-      // Use tries to find matching rows for each input
-      for (int varIdx = 0; varIdx < numVariables; varIdx++) {
-        Object value = currentValues[varIdx];
-        List<HashTrie<Object[]>> triesForVar = triesPerVariable.get(varIdx);
-        int[] inputsForVar = variableToInputs[varIdx];
-
-        for (int i = 0; i < inputsForVar.length; i += 2) {
-          int inputIdx = inputsForVar[i];
-          int trieIdx = i / 2;
-          int fieldIdx = inputsForVar[i + 1];
-
-          if (rowsPerInput.get(inputIdx).isEmpty()) {
-            // First variable for this input - initialize rows from trie
-            HashTrie<Object[]> trie = triesForVar.get(trieIdx);
-            for (Object[] row : trie.probe(Collections.singletonList(value))) {
-              rowsPerInput.get(inputIdx).add(row);
-            }
-          } else {
-            // Filter existing rows based on this variable's value
-            List<Object[]> filtered = new ArrayList<>();
-            for (Object[] row : rowsPerInput.get(inputIdx)) {
-              if (Objects.equals(row[fieldIdx], value)) {
-                filtered.add(row);
-              }
-            }
-            rowsPerInput.set(inputIdx, filtered);
-          }
+        // Build full probe prefix for this input
+        List<Object> probeKeys = new ArrayList<>();
+        for (int localLevel = 0; localLevel < inputVarOrder[inputIdx].length; localLevel++) {
+          int globalVar = inputVarOrder[inputIdx][localLevel];
+          probeKeys.add(currentValues[globalVar]);
         }
-      }
 
-      // Check if any input has no matching rows
-      for (List<Object[]> rows : rowsPerInput) {
+        List<Object[]> rows = new ArrayList<>();
+        for (Object[] row : trie.probe(probeKeys)) {
+          rows.add(row);
+        }
+
         if (rows.isEmpty()) {
           return Collections.emptyList();
         }
+        rowsPerInput.add(rows);
       }
 
       // Generate cross product of matching rows

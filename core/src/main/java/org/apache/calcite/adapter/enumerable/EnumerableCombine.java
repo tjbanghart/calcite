@@ -49,6 +49,13 @@ public class EnumerableCombine extends Combine implements EnumerableRel {
     final RelDataType rowType = getRowType();
     final List<Expression> fieldExpressions = new ArrayList<>();
 
+    // Create a shared TrieCache for child WCOJ operators to reuse tries
+    // across queries that share the same input relations.
+    final Expression trieCacheExpr = builder.append(
+        "trieCache",
+        Expressions.new_(org.apache.calcite.linq4j.TrieCache.class));
+    implementor.setTrieCacheExpr(trieCacheExpr);
+
     // Implement each input and collect their results
     // Convert each Enumerable to a List since the row type is STRUCT<QUERY_0: ARRAY<...>, ...>
     for (Ord<RelNode> ord : Ord.zip(inputs)) {
@@ -71,6 +78,9 @@ public class EnumerableCombine extends Combine implements EnumerableRel {
                       "toList")));
       fieldExpressions.add(listExp);
     }
+
+    // Clear the trie cache expression now that all children are implemented
+    implementor.clearTrieCacheExpr();
 
     // The physical type represents the struct of all query results
     final PhysType physType =

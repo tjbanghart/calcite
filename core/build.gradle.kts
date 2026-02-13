@@ -332,3 +332,21 @@ tasks.register<JavaExec>("runBenchmark") {
         args(project.property("benchmarkArgs").toString().split(" ").filter { it.isNotBlank() })
     }
 }
+
+// Task to run the WCOJ benchmark (baseline vs WCOJ vs multi-query WCOJ)
+tasks.register<JavaExec>("runWcojBenchmark") {
+    group = "benchmark"
+    description = "Run WCOJ benchmark. Usage: ./gradlew :core:runWcojBenchmark -PwcojBenchmarkArgs=\"--nodes=200 --edges=1000\""
+
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.apache.calcite.test.WCOJBenchmarkCli")
+    maxHeapSize = "2g"
+
+    // WCOJ requires this system property to be enabled
+    jvmArgs("-Dcalcite.enable.wcoj=true")
+
+    if (project.hasProperty("wcojBenchmarkArgs")) {
+        args(project.property("wcojBenchmarkArgs").toString().split(" ").filter { it.isNotBlank() })
+    }
+}

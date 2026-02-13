@@ -5008,6 +5008,69 @@ public abstract class EnumerableDefaults {
   }
 
   /**
+   * Computes shared prefix bindings for WCOJ operators that share
+   * a variable prefix. Iterates only the first {@code prefixDepth} variables
+   * and produces one {@code Object[]} per valid binding combination.
+   *
+   * <p>The TrieCache is populated during this computation so that suffix
+   * WCOJ operators can reuse the tries.
+   *
+   * @param inputs the input enumerables
+   * @param variableToInputs variable-to-input mapping (full, not just prefix)
+   * @param trieCache shared trie cache
+   * @param prefixDepth number of prefix variables to iterate
+   * @return enumerable of prefix bindings (each Object[] has prefixDepth elements)
+   */
+  public static Enumerable<Object[]> wcojPrefix(
+      List<Enumerable<Object[]>> inputs,
+      int[][] variableToInputs,
+      @Nullable TrieCache trieCache,
+      int prefixDepth) {
+
+    return new AbstractEnumerable<Object[]>() {
+      @Override public Enumerator<Object[]> enumerator() {
+        return new WCOJPrefixEnumerator(inputs, variableToInputs,
+            trieCache, prefixDepth);
+      }
+    };
+  }
+
+  /**
+   * Worst-Case Optimal Join that starts from precomputed prefix bindings.
+   *
+   * <p>For each prefix binding, sets the first {@code prefixDepth} variable
+   * values and continues normal backtracking from that point. Reuses tries
+   * from the TrieCache (already built by the prefix computation).
+   *
+   * @param inputs the input enumerables
+   * @param joinKeyIndices join key indices per input
+   * @param variableToInputs variable-to-input mapping (full)
+   * @param resultSelector result row constructor
+   * @param trieCache shared trie cache
+   * @param prefixBindings precomputed prefix bindings
+   * @param prefixDepth number of prefix levels already bound
+   * @param <TResult> result type
+   * @return enumerable of join results
+   */
+  public static <TResult> Enumerable<TResult> wcojWithSharedPrefix(
+      List<Enumerable<Object[]>> inputs,
+      List<int[]> joinKeyIndices,
+      int[][] variableToInputs,
+      Function1<Object[][], TResult> resultSelector,
+      @Nullable TrieCache trieCache,
+      Enumerable<Object[]> prefixBindings,
+      int prefixDepth) {
+
+    return new AbstractEnumerable<TResult>() {
+      @Override public Enumerator<TResult> enumerator() {
+        return new WCOJWithPrefixEnumerator<>(inputs, joinKeyIndices,
+            variableToInputs, resultSelector, trieCache,
+            prefixBindings, prefixDepth);
+      }
+    };
+  }
+
+  /**
    * Enumerator for Worst-Case Optimal Join (WCOJ).
    *
    * <p>Implements the adopt probing algorithm:
@@ -5055,6 +5118,10 @@ public abstract class EnumerableDefaults {
     private boolean initialized;
     private boolean finished;
     private @Nullable TResult current;
+
+    // Prefix depth when operating in suffix-only mode (set by resetWithPrefix).
+    // moveNextSuffix stops backtracking when currentLevel falls below this.
+    private int suffixPrefixDepth;
 
     WCOJEnumerator(
         List<Enumerable<Object[]>> inputs,
@@ -5390,8 +5457,407 @@ public abstract class EnumerableDefaults {
       }
     }
 
+    /**
+     * Resets the enumerator with prefix bindings pre-set, so that
+     * backtracking continues from {@code prefixDepth} onward.
+     *
+     * <p>Used by {@link WCOJWithPrefixEnumerator} to inject shared
+     * prefix bindings and run only the suffix.
+     */
+    void resetWithPrefix(Object[] prefixBinding, int prefixDepth) {
+      matchIterator = null;
+      current = null;
+      finished = numVariables == 0 || numInputs == 0;
+      suffixPrefixDepth = prefixDepth;
+
+      // Set prefix variable bindings
+      for (int i = 0; i < prefixDepth && i < numVariables; i++) {
+        currentValues[i] = prefixBinding[i];
+      }
+
+      // Clear suffix state
+      for (int i = prefixDepth; i < numVariables; i++) {
+        currentValues[i] = null;
+        candidateValues.get(i).clear();
+        candidateIndices[i] = -1;
+      }
+
+      // Initialize suffix levels
+      for (int level = prefixDepth; level < numVariables; level++) {
+        initCandidatesAtLevel(level);
+        if (!advanceAtLevel(level)) {
+          finished = true;
+          break;
+        }
+      }
+
+      if (!finished) {
+        currentLevel = numVariables;
+        // Pre-load first match set
+        List<Object[][]> matches = collectMatches();
+        if (!matches.isEmpty()) {
+          matchIterator = matches.iterator();
+        }
+      }
+
+      // Mark as initialized so moveNextSuffix uses the backtracking loop
+      initialized = true;
+    }
+
+    /**
+     * Like {@link #moveNext()} but operates within a single prefix binding.
+     * Returns false when the current prefix binding is exhausted (not when
+     * the entire enumeration is done). Backtracking stops at
+     * {@code suffixPrefixDepth} (set by {@link #resetWithPrefix}).
+     */
+    boolean moveNextSuffix() {
+      final int floor = suffixPrefixDepth;
+      while (!finished) {
+        // If we have pending matches, return the next one
+        if (matchIterator != null && matchIterator.hasNext()) {
+          Object[][] match = matchIterator.next();
+          current = resultSelector.apply(match);
+          return true;
+        }
+        matchIterator = null;
+
+        // If at max level, backtrack one step
+        if (currentLevel == numVariables) {
+          currentLevel--;
+        }
+
+        // Find next valid assignment, but don't backtrack below floor
+        while (currentLevel >= floor) {
+          if (advanceAtLevel(currentLevel)) {
+            currentLevel++;
+            while (currentLevel < numVariables) {
+              initCandidatesAtLevel(currentLevel);
+              if (!advanceAtLevel(currentLevel)) {
+                break;
+              }
+              currentLevel++;
+            }
+
+            if (currentLevel == numVariables) {
+              List<Object[][]> matches = collectMatches();
+              if (!matches.isEmpty()) {
+                matchIterator = matches.iterator();
+                break;
+              }
+              currentLevel--;
+            }
+          } else {
+            currentLevel--;
+          }
+        }
+
+        if (currentLevel < floor) {
+          // Exhausted all suffix combinations for this prefix
+          current = null;
+          return false;
+        }
+      }
+
+      current = null;
+      return false;
+    }
+
     @Override public void close() {
       // No resources to close
+    }
+  }
+
+  /**
+   * Enumerator that computes shared prefix bindings for WCOJ.
+   *
+   * <p>Iterates only the first {@code prefixDepth} variables using the same
+   * multi-level trie infrastructure as {@link WCOJEnumerator}, but instead
+   * of collecting full join matches, it yields the variable bindings as
+   * {@code Object[]} arrays.
+   */
+  private static class WCOJPrefixEnumerator implements Enumerator<Object[]> {
+    private final int numVariables;
+    private final int prefixDepth;
+    private final int numInputs;
+    private final int[][] variableToInputs;
+
+    private final List<HashTrie<Object[]>> triePerInput;
+    private final int[][] inputVarOrder;
+    private final int[][] localTrieLevel;
+    private final List<List<Integer>> inputsForVariable;
+
+    private final Object[] currentValues;
+    private final List<List<Object>> candidateValues;
+    private final int[] candidateIndices;
+
+    private int currentLevel;
+    private boolean initialized;
+    private boolean finished;
+    private @Nullable Object[] current;
+
+    WCOJPrefixEnumerator(
+        List<Enumerable<Object[]>> inputs,
+        int[][] variableToInputs,
+        @Nullable TrieCache trieCache,
+        int prefixDepth) {
+      this.variableToInputs = variableToInputs;
+      this.numVariables = variableToInputs.length;
+      this.prefixDepth = prefixDepth;
+      this.numInputs = inputs.size();
+
+      this.currentValues = new Object[numVariables];
+      this.candidateValues = new ArrayList<>(numVariables);
+      this.candidateIndices = new int[numVariables];
+      this.currentLevel = 0;
+      this.initialized = false;
+      this.finished = prefixDepth == 0 || numInputs == 0;
+
+      for (int i = 0; i < numVariables; i++) {
+        candidateValues.add(new ArrayList<>());
+      }
+
+      // Reuse the same trie-building logic as WCOJEnumerator
+      this.inputVarOrder = new int[numInputs][];
+      int[][] inputFieldForVar = new int[numInputs][];
+      this.localTrieLevel = new int[numInputs][numVariables];
+      this.inputsForVariable = new ArrayList<>(numVariables);
+
+      for (int i = 0; i < numInputs; i++) {
+        Arrays.fill(localTrieLevel[i], -1);
+      }
+      for (int v = 0; v < numVariables; v++) {
+        inputsForVariable.add(new ArrayList<>());
+      }
+
+      @SuppressWarnings("unchecked")
+      List<int[]>[] inputVarFieldPairs = new List[numInputs];
+      for (int i = 0; i < numInputs; i++) {
+        inputVarFieldPairs[i] = new ArrayList<>();
+      }
+
+      for (int varIdx = 0; varIdx < numVariables; varIdx++) {
+        int[] mapping = variableToInputs[varIdx];
+        for (int i = 0; i < mapping.length; i += 2) {
+          int inputIdx = mapping[i];
+          int fieldIdx = mapping[i + 1];
+          inputVarFieldPairs[inputIdx].add(new int[]{varIdx, fieldIdx});
+          inputsForVariable.get(varIdx).add(inputIdx);
+        }
+      }
+
+      for (int inputIdx = 0; inputIdx < numInputs; inputIdx++) {
+        List<int[]> pairs = inputVarFieldPairs[inputIdx];
+        inputVarOrder[inputIdx] = new int[pairs.size()];
+        inputFieldForVar[inputIdx] = new int[pairs.size()];
+        for (int localLevel = 0; localLevel < pairs.size(); localLevel++) {
+          int[] pair = pairs.get(localLevel);
+          inputVarOrder[inputIdx][localLevel] = pair[0];
+          inputFieldForVar[inputIdx][localLevel] = pair[1];
+          localTrieLevel[inputIdx][pair[0]] = localLevel;
+        }
+      }
+
+      // Build multi-level tries per input
+      this.triePerInput = new ArrayList<>(numInputs);
+      for (int inputIdx = 0; inputIdx < numInputs; inputIdx++) {
+        int[] fieldIndices = inputFieldForVar[inputIdx];
+        List<Function1<Object[], @Nullable Object>> extractors = new ArrayList<>();
+        for (int fieldIdx : fieldIndices) {
+          final int f = fieldIdx;
+          extractors.add(row -> row[f]);
+        }
+        if (extractors.isEmpty()) {
+          extractors.add(row -> row[0]);
+        }
+        triePerInput.add(HashTrie.build(inputs.get(inputIdx), extractors));
+      }
+    }
+
+    private void initCandidatesAtLevel(int level) {
+      List<Object> candidates = candidateValues.get(level);
+      candidates.clear();
+      candidateIndices[level] = -1;
+
+      List<Integer> participatingInputs = inputsForVariable.get(level);
+      if (participatingInputs.isEmpty()) {
+        return;
+      }
+
+      Set<Object> intersection = null;
+      for (int inputIdx : participatingInputs) {
+        HashTrie<Object[]> trie = triePerInput.get(inputIdx);
+        int localLevel = localTrieLevel[inputIdx][level];
+
+        List<Object> prefix = new ArrayList<>();
+        for (int priorLocal = 0; priorLocal < localLevel; priorLocal++) {
+          int priorGlobalVar = inputVarOrder[inputIdx][priorLocal];
+          prefix.add(currentValues[priorGlobalVar]);
+        }
+
+        Set<Object> keys = new HashSet<>();
+        for (Object key : trie.getKeysAtLevel(localLevel, prefix)) {
+          keys.add(key);
+        }
+
+        if (intersection == null) {
+          intersection = keys;
+        } else {
+          intersection.retainAll(keys);
+          if (intersection.isEmpty()) {
+            return;
+          }
+        }
+      }
+
+      if (intersection != null) {
+        candidates.addAll(intersection);
+      }
+    }
+
+    private boolean advanceAtLevel(int level) {
+      List<Object> candidates = candidateValues.get(level);
+      int idx = candidateIndices[level] + 1;
+      if (idx < candidates.size()) {
+        candidateIndices[level] = idx;
+        currentValues[level] = candidates.get(idx);
+        return true;
+      }
+      return false;
+    }
+
+    @Override public Object[] current() {
+      if (current == null) {
+        throw new NoSuchElementException();
+      }
+      return current;
+    }
+
+    @Override public boolean moveNext() {
+      while (!finished) {
+        if (!initialized) {
+          initialized = true;
+          for (int level = 0; level < prefixDepth; level++) {
+            initCandidatesAtLevel(level);
+            if (!advanceAtLevel(level)) {
+              finished = true;
+              break;
+            }
+          }
+          if (!finished) {
+            currentLevel = prefixDepth;
+            current = Arrays.copyOf(currentValues, prefixDepth);
+            return true;
+          }
+        }
+
+        if (currentLevel == prefixDepth) {
+          currentLevel--;
+        }
+
+        while (currentLevel >= 0) {
+          if (advanceAtLevel(currentLevel)) {
+            currentLevel++;
+            while (currentLevel < prefixDepth) {
+              initCandidatesAtLevel(currentLevel);
+              if (!advanceAtLevel(currentLevel)) {
+                break;
+              }
+              currentLevel++;
+            }
+
+            if (currentLevel == prefixDepth) {
+              current = Arrays.copyOf(currentValues, prefixDepth);
+              return true;
+            }
+          } else {
+            currentLevel--;
+          }
+        }
+
+        if (currentLevel < 0) {
+          finished = true;
+        }
+      }
+
+      current = null;
+      return false;
+    }
+
+    @Override public void reset() {
+      currentLevel = 0;
+      initialized = false;
+      finished = prefixDepth == 0 || numInputs == 0;
+      current = null;
+      Arrays.fill(candidateIndices, -1);
+      Arrays.fill(currentValues, null);
+      for (List<Object> candidates : candidateValues) {
+        candidates.clear();
+      }
+    }
+
+    @Override public void close() {
+    }
+  }
+
+  /**
+   * Enumerator that continues a WCOJ from precomputed prefix bindings.
+   *
+   * <p>For each prefix binding, sets the first {@code prefixDepth} variable
+   * values and continues normal backtracking from that point. Reuses tries
+   * from the same inputs (which should be shared via TrieCache).
+   */
+  private static class WCOJWithPrefixEnumerator<TResult>
+      implements Enumerator<TResult> {
+    private final WCOJEnumerator<TResult> delegate;
+    private final Enumerator<Object[]> prefixEnumerator;
+    private final int prefixDepth;
+
+    WCOJWithPrefixEnumerator(
+        List<Enumerable<Object[]>> inputs,
+        List<int[]> joinKeyIndices,
+        int[][] variableToInputs,
+        Function1<Object[][], TResult> resultSelector,
+        @Nullable TrieCache trieCache,
+        Enumerable<Object[]> prefixBindings,
+        int prefixDepth) {
+      this.delegate = new WCOJEnumerator<>(inputs, joinKeyIndices,
+          variableToInputs, resultSelector, trieCache);
+      this.prefixEnumerator = prefixBindings.enumerator();
+      this.prefixDepth = prefixDepth;
+    }
+
+    @Override public TResult current() {
+      return delegate.current();
+    }
+
+    @Override public boolean moveNext() {
+      // The delegate handles the suffix backtracking. We drive it by
+      // iterating prefix bindings and for each one, running the suffix.
+      while (true) {
+        // Try to get next result from current suffix execution
+        if (delegate.moveNextSuffix()) {
+          return true;
+        }
+
+        // Current prefix binding exhausted — advance to next prefix binding
+        if (!prefixEnumerator.moveNext()) {
+          return false;
+        }
+
+        // Inject the prefix binding and restart suffix
+        Object[] binding = prefixEnumerator.current();
+        delegate.resetWithPrefix(binding, prefixDepth);
+      }
+    }
+
+    @Override public void reset() {
+      prefixEnumerator.reset();
+      delegate.reset();
+    }
+
+    @Override public void close() {
+      prefixEnumerator.close();
+      delegate.close();
     }
   }
 }

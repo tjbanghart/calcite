@@ -79,8 +79,9 @@ public class EnumerableCombine extends Combine implements EnumerableRel {
       fieldExpressions.add(listExp);
     }
 
-    // Clear the trie cache expression now that all children are implemented
+    // Clear the trie cache and prefix bindings now that all children are implemented
     implementor.clearTrieCacheExpr();
+    implementor.clearPrefixBindings();
 
     // The physical type represents the struct of all query results
     final PhysType physType =

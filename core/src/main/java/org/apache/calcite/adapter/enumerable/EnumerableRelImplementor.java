@@ -91,6 +91,11 @@ public class EnumerableRelImplementor extends JavaRelImplementor {
   /** Expression referencing a shared TrieCache, set by Combine for its WCOJ children. */
   private @Nullable Expression trieCacheExpr;
 
+  /** Cached prefix bindings expressions, keyed by group ID.
+   * Used by {@link EnumerableWCOJWithPrefix} to share prefix computation
+   * within a group of WCOJ operators. */
+  private final Map<Integer, Expression> prefixBindingsExprs = new HashMap<>();
+
   @SuppressWarnings("methodref.receiver.bound.invalid")
   protected final Function1<String, RexToLixTranslator.InputGetter> allCorrelateVariables =
       this::getCorrelVariableGetter;
@@ -504,6 +509,28 @@ public class EnumerableRelImplementor extends JavaRelImplementor {
    */
   public void clearTrieCacheExpr() {
     this.trieCacheExpr = null;
+  }
+
+  /**
+   * Returns (or creates) the shared prefix bindings expression for a
+   * WCOJ prefix group. The first caller in the group creates the expression
+   * via the factory; subsequent callers in the same group reuse it.
+   *
+   * @param groupId   the prefix group identifier
+   * @param factory   supplier that builds the prefix computation expression
+   * @return the cached or newly created expression
+   */
+  public Expression getOrCreatePrefixBindings(
+      int groupId, java.util.function.Supplier<Expression> factory) {
+    return prefixBindingsExprs.computeIfAbsent(groupId, k -> factory.get());
+  }
+
+  /**
+   * Clears all cached prefix bindings expressions. Called by Combine
+   * after visiting all children.
+   */
+  public void clearPrefixBindings() {
+    prefixBindingsExprs.clear();
   }
 
   public EnumerableRel.Result result(PhysType physType, BlockStatement block) {

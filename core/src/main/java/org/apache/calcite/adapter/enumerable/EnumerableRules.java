@@ -201,6 +201,13 @@ public class EnumerableRules {
   public static final RelOptRule ENUMERABLE_WCOJ_RULE =
       EnumerableWCOJRule.DEFAULT_CONFIG.toRule(EnumerableWCOJRule.class);
 
+  /** Rule that optimizes a {@link EnumerableCombine} containing multiple
+   * {@link EnumerableWCOJ} children by detecting shared variable prefixes
+   * and rewriting them to use shared prefix computation. */
+  @Experimental
+  public static final RelOptRule ENUMERABLE_COMBINE_WCOJ_PREFIX_RULE =
+      EnumerableCombineWCOJPrefixRule.Config.DEFAULT.toRule();
+
   /** Rule to convert a {@link LogicalAggregate}
    * to an {@link EnumerableSortedAggregate}. */
   public static final EnumerableSortedAggregateRule ENUMERABLE_SORTED_AGGREGATE_RULE =

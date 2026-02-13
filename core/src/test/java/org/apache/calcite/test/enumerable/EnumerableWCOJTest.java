@@ -19,11 +19,14 @@ package org.apache.calcite.test.enumerable;
 import org.apache.calcite.adapter.enumerable.EnumerableConvention;
 import org.apache.calcite.adapter.enumerable.EnumerableRules;
 import org.apache.calcite.adapter.enumerable.EnumerableWCOJ;
+import org.apache.calcite.adapter.enumerable.JoinVariableFingerprint;
+import org.apache.calcite.adapter.enumerable.WCOJPrefixAnalyzer;
 import org.apache.calcite.config.CalciteConnectionProperty;
 import org.apache.calcite.config.Lex;
 import org.apache.calcite.linq4j.Enumerable;
 import org.apache.calcite.linq4j.EnumerableDefaults;
 import org.apache.calcite.linq4j.Linq4j;
+import org.apache.calcite.linq4j.TrieCache;
 import org.apache.calcite.linq4j.function.Function1;
 import org.apache.calcite.plan.ConventionTraitDef;
 import org.apache.calcite.plan.RelOptPlanner;
@@ -624,6 +627,236 @@ class EnumerableWCOJTest {
     assertThat(clique[1], is(2));  // y
     assertThat(clique[2], is(3));  // z
     assertThat(clique[3], is(4));  // w
+  }
+
+  // =========================================================================
+  // Prefix sharing runtime tests (Phase C)
+  // =========================================================================
+
+  /**
+   * Tests wcojPrefix: computes shared prefix bindings for the first K
+   * variables of a WCOJ and yields them as Object[] arrays.
+   */
+  @Test void testWcojPrefix() {
+    // Two inputs: R(a, b), S(a, c) — share variable 'a'
+    List<Object[]> tableR = Arrays.asList(
+        new Object[]{1, 10},
+        new Object[]{2, 20},
+        new Object[]{3, 30});
+
+    List<Object[]> tableS = Arrays.asList(
+        new Object[]{1, 100},
+        new Object[]{2, 200},
+        new Object[]{4, 400});
+
+    List<Enumerable<Object[]>> inputs = Arrays.asList(
+        Linq4j.asEnumerable(tableR),
+        Linq4j.asEnumerable(tableS));
+
+    // Variable 0: a at R.0 and S.0
+    int[][] variableToInputs = new int[][]{
+        {0, 0, 1, 0}
+    };
+
+    Enumerable<Object[]> prefixBindings =
+        EnumerableDefaults.wcojPrefix(inputs, variableToInputs, null, 1);
+
+    List<Object[]> bindings = prefixBindings.toList();
+
+    // Intersection of R.a and S.a = {1, 2}
+    assertThat(bindings.size(), is(2));
+    Set<Object> prefixValues = new HashSet<>();
+    for (Object[] b : bindings) {
+      assertThat(b.length, is(1));
+      prefixValues.add(b[0]);
+    }
+    assertTrue(prefixValues.contains(1));
+    assertTrue(prefixValues.contains(2));
+  }
+
+  /**
+   * Tests wcojWithSharedPrefix: runs a suffix WCOJ starting from
+   * precomputed prefix bindings.
+   */
+  @Test void testWcojWithSharedPrefix() {
+    // Triangle query: R(a,b) JOIN S(b,c) JOIN T(c,a)
+    // Prefix: variable a (shared by R and T)
+    // Suffix: variables b, c
+    List<Object[]> tableR = Arrays.asList(
+        new Object[]{1, 2},
+        new Object[]{4, 5});
+
+    List<Object[]> tableS = Arrays.asList(
+        new Object[]{2, 3},
+        new Object[]{5, 6});
+
+    List<Object[]> tableT = Arrays.asList(
+        new Object[]{3, 1},
+        new Object[]{6, 7});
+
+    List<Enumerable<Object[]>> inputs = Arrays.asList(
+        Linq4j.asEnumerable(tableR),
+        Linq4j.asEnumerable(tableS),
+        Linq4j.asEnumerable(tableT));
+
+    List<int[]> joinKeyIndices = Arrays.asList(
+        new int[]{0, 1},
+        new int[]{0, 1},
+        new int[]{0, 1});
+
+    // Var 0: a at R.0, T.1
+    // Var 1: b at R.1, S.0
+    // Var 2: c at S.1, T.0
+    int[][] variableToInputs = new int[][]{
+        {0, 0, 2, 1},
+        {0, 1, 1, 0},
+        {1, 1, 2, 0}
+    };
+
+    // Prefix: only variable 0 (a)
+    int[][] prefixVarToInputs = new int[][]{
+        {0, 0, 2, 1}
+    };
+
+    TrieCache trieCache = new TrieCache();
+
+    // Compute prefix bindings
+    Enumerable<Object[]> prefixBindings =
+        EnumerableDefaults.wcojPrefix(inputs, prefixVarToInputs, trieCache, 1);
+
+    Function1<Object[][], Object[]> resultSelector = inputRows -> {
+      Object[] r = inputRows[0];
+      Object[] s = inputRows[1];
+      Object[] t = inputRows[2];
+      return new Object[]{r[0], r[1], s[0], s[1], t[0], t[1]};
+    };
+
+    // Run suffix WCOJ with shared prefix
+    Enumerable<Object[]> result = EnumerableDefaults.wcojWithSharedPrefix(
+        inputs, joinKeyIndices, variableToInputs, resultSelector,
+        trieCache, prefixBindings, 1);
+
+    List<Object[]> resultList = result.toList();
+
+    // Should find triangle: R(1,2), S(2,3), T(3,1)
+    assertThat(resultList.size(), is(1));
+    Object[] triangle = resultList.get(0);
+    assertThat(triangle[0], is(1));  // R.a
+    assertThat(triangle[1], is(2));  // R.b
+    assertThat(triangle[2], is(2));  // S.b
+    assertThat(triangle[3], is(3));  // S.c
+    assertThat(triangle[4], is(3));  // T.c
+    assertThat(triangle[5], is(1));  // T.a
+  }
+
+  /**
+   * Tests that wcojWithSharedPrefix produces the same results as regular
+   * wcoj for a triangle query — verifying equivalence.
+   */
+  @Test void testWcojWithPrefixEquivalence() {
+    // Multiple triangles: (1,2,3,1), (1,2,4,1)
+    List<Object[]> tableR = Arrays.asList(
+        new Object[]{1, 2},
+        new Object[]{5, 6});
+
+    List<Object[]> tableS = Arrays.asList(
+        new Object[]{2, 3},
+        new Object[]{2, 4},
+        new Object[]{6, 7});
+
+    List<Object[]> tableT = Arrays.asList(
+        new Object[]{3, 1},
+        new Object[]{4, 1},
+        new Object[]{7, 8});
+
+    List<Enumerable<Object[]>> inputs = Arrays.asList(
+        Linq4j.asEnumerable(tableR),
+        Linq4j.asEnumerable(tableS),
+        Linq4j.asEnumerable(tableT));
+
+    List<int[]> joinKeyIndices = Arrays.asList(
+        new int[]{0, 1},
+        new int[]{0, 1},
+        new int[]{0, 1});
+
+    int[][] variableToInputs = new int[][]{
+        {0, 0, 2, 1},
+        {0, 1, 1, 0},
+        {1, 1, 2, 0}
+    };
+
+    Function1<Object[][], Object[]> resultSelector = inputRows -> {
+      Object[] r = inputRows[0];
+      Object[] s = inputRows[1];
+      Object[] t = inputRows[2];
+      return new Object[]{r[0], r[1], s[1], t[0]};
+    };
+
+    // Regular WCOJ
+    Enumerable<Object[]> regularResult = EnumerableDefaults.wcoj(
+        inputs, joinKeyIndices, variableToInputs, resultSelector);
+    Set<String> regularResultSet = new HashSet<>();
+    for (Object[] row : regularResult.toList()) {
+      regularResultSet.add(Arrays.toString(row));
+    }
+
+    // Prefix WCOJ (prefixDepth = 1, sharing variable 'a')
+    int[][] prefixVarToInputs = new int[][]{
+        {0, 0, 2, 1}
+    };
+    TrieCache trieCache = new TrieCache();
+    Enumerable<Object[]> prefixBindings =
+        EnumerableDefaults.wcojPrefix(inputs, prefixVarToInputs, trieCache, 1);
+    Enumerable<Object[]> prefixResult = EnumerableDefaults.wcojWithSharedPrefix(
+        inputs, joinKeyIndices, variableToInputs, resultSelector,
+        trieCache, prefixBindings, 1);
+    Set<String> prefixResultSet = new HashSet<>();
+    for (Object[] row : prefixResult.toList()) {
+      prefixResultSet.add(Arrays.toString(row));
+    }
+
+    // Both should produce the same results
+    assertThat("Prefix WCOJ should produce same results as regular WCOJ",
+        prefixResultSet, is(regularResultSet));
+    assertThat("Should find 2 triangles", regularResultSet.size(), is(2));
+  }
+
+  /**
+   * Tests that wcojWithSharedPrefix correctly handles empty prefix bindings.
+   */
+  @Test void testWcojWithEmptyPrefix() {
+    List<Object[]> tableR = Arrays.<Object[]>asList(
+        new Object[]{1, 2});
+
+    List<Object[]> tableS = Arrays.<Object[]>asList(
+        new Object[]{3, 100});  // No match on a
+
+    List<Enumerable<Object[]>> inputs = Arrays.asList(
+        Linq4j.asEnumerable(tableR),
+        Linq4j.asEnumerable(tableS));
+
+    List<int[]> joinKeyIndices = Arrays.asList(
+        new int[]{0},
+        new int[]{0});
+
+    int[][] variableToInputs = new int[][]{
+        {0, 0, 1, 0}
+    };
+
+    int[][] prefixVarToInputs = new int[][]{
+        {0, 0, 1, 0}
+    };
+
+    Function1<Object[][], Object[]> resultSelector = inputRows ->
+        new Object[]{inputRows[0][0], inputRows[1][1]};
+
+    Enumerable<Object[]> prefixBindings =
+        EnumerableDefaults.wcojPrefix(inputs, prefixVarToInputs, null, 1);
+    Enumerable<Object[]> result = EnumerableDefaults.wcojWithSharedPrefix(
+        inputs, joinKeyIndices, variableToInputs, resultSelector,
+        null, prefixBindings, 1);
+
+    assertTrue(result.toList().isEmpty());
   }
 
   /**

@@ -32,21 +32,23 @@ In this paper, we present an integrated system within Apache Calcite [9] that co
 
 4. **Formal analysis and experimental evaluation.** We prove the correctness of prefix sharing and analyze the cost model, then evaluate the system on synthetic graph workloads demonstrating significant speedups.
 
-The rest of this paper is organized as follows. Section 2 provides background on WCOJ algorithms and MQO. Section 3 presents a comprehensive literature review spanning WCOJ theory, practical implementations, MQO techniques, and query optimization frameworks. Section 4 describes the WCOJ integration into Calcite. Section 5 presents the `Combine` operator and multi-query framework. Section 6 details the three layers of shared computation. Section 7 provides formal analysis. Section 8 presents experimental results. Section 9 discusses related work and positioning, and Section 10 concludes.
+The rest of this paper is organized as follows. Section 2 surveys related work on WCOJ algorithms, multi-query optimization, and query processing frameworks. Section 3 describes the WCOJ integration into Calcite. Section 4 presents the `Combine` operator and multi-query framework. Section 5 details the three layers of shared computation. Section 6 provides formal analysis. Section 7 presents experimental results, and Section 8 concludes.
 
 ---
 
-## 2. Background
+## 2. Background and Related Work
+
+This section surveys the two bodies of work that our system bridges---worst-case optimal join algorithms and multi-query optimization---as well as the query processing frameworks that provide the architectural substrate for integration.
 
 ### 2.1 Worst-Case Optimal Join Algorithms
 
-The theoretical foundations for WCOJ algorithms were established by Atserias, Grohe, and Marx [2], who proved a tight upper bound on the maximum output size of a natural join query as a function of input relation cardinalities. For a join query $Q$ over relations $R_1, \ldots, R_n$ with attributes from a universe $\mathcal{U}$, the *AGM bound* states:
+The theoretical foundations for WCOJ algorithms were established by Atserias, Grohe, and Marx [2] at FOCS 2008 (journal version in SIAM Journal on Computing, 2013). Their *AGM bound* shows that for a join query $Q$ over relations $R_1, \ldots, R_n$, the maximum output size is:
 
 $$|Q(D)| \leq \prod_{i=1}^{n} |R_i(D)|^{x_i^*}$$
 
-where $x_i^*$ is the solution to the fractional edge cover linear program over the query hypergraph. For the triangle query, this yields $|Q_\triangle| \leq |R|^{1/2} \cdot |S|^{1/2} \cdot |T|^{1/2} = |E|^{3/2}$, which is tight and strictly better than the $O(|E|^2)$ intermediate result possible with binary joins.
+where $\mathbf{x}^*$ is the optimal solution to the *fractional edge cover* linear program over the query hypergraph. This bound is tight: for every query and set of cardinalities, there exists a database instance achieving it. For the triangle query, this yields $|Q_\triangle| \leq |R|^{1/2} \cdot |S|^{1/2} \cdot |T|^{1/2} = |E|^{3/2}$, which is strictly better than the $O(|E|^2)$ intermediate result possible with binary joins.
 
-Ngo, Porat, Re, and Rudra [3] proved that the `Generic-Join` algorithm achieves worst-case optimality:
+Ngo, Porat, Re, and Rudra [3] (PODS 2012, JACM 2018) proved that `Generic-Join` achieves this bound:
 
 ```
 GENERIC-JOIN(Relations R_1...R_n, Variables x_1...x_m):
@@ -60,60 +62,21 @@ GENERIC-JOIN(Relations R_1...R_n, Variables x_1...x_m):
         GENERIC-JOIN(R_1...R_n, x_2...x_m)
 ```
 
-The algorithm processes variables one at a time, maintaining partial bindings. At each level, it computes the intersection of candidate values across all relations that constrain the current variable, conditioned on the bindings established at prior levels.
+The algorithm processes variables one at a time, computing the intersection of candidate values across all relations that constrain each variable. Their proof proceeds by induction on the number of variables, using the AGM bound at each level to bound the work done.
 
-Veldhuizen [4] introduced *Leapfrog Triejoin*, a practical implementation of this family using sorted trie indices and a `leapfrog` intersection primitive that exploits sorted order for efficient multi-way intersection. Freitag et al. [5] later showed how to integrate WCOJ into a general-purpose RDBMS (Umbra/HyPer) using hash-based tries, demonstrating that the overhead of trie construction can be amortized within standard query execution.
+The theoretical landscape was further enriched by Ngo, Re, and Rudra's survey "Skew Strikes Back" [18], which unified the AGM bound with degree-based bounds (the *BRR bound*, named after Beame, Koutris, and Suciu), showed connections to information-theoretic entropy bounds, and introduced the *Minesweeper* algorithm---a certificate-based approach that can outperform Generic-Join on favorable instances. Beyond cardinality-based bounds, Gottlob, Leone, and Scarcello [21] showed that queries with bounded (generalized) hypertree width can be evaluated in polynomial time. The fractional hypertree width connects directly to the AGM bound: a query achieves $|Q(D)| \leq |D|^{\text{fhtw}(Q)}$. Ngo's invited PODS 2018 tutorial [24] provides a comprehensive overview of these developments, identifying open problems including adaptive variable ordering, handling inequality predicates, and extending WCOJ to aggregate queries.
 
-### 2.2 Multi-Query Optimization
-
-Multi-query optimization was formalized by Sellis [6], who showed that identifying and sharing common sub-expressions across concurrent queries can reduce total execution cost significantly. The problem is NP-hard in general [7, 10], as it involves selecting a subset of materializable intermediate results that maximizes cost savings under resource constraints.
-
-Subsequent work has explored heuristic approaches within the Volcano/Cascades framework [8], algebraic reformulation using $\psi$-operators [11], and hybrid strategies combining batched execution with materialized view reuse [12]. More recently, the convergence of query optimization and workload-level optimization has been identified as a key industrial trend [13].
-
-Despite this rich body of work, no prior system has combined MQO with WCOJ algorithms. This intersection is particularly promising because WCOJ workloads---graph pattern queries, subgraph matching, and combinatorial joins---are precisely the workloads most likely to appear in structurally similar batches (e.g., multiple triangle queries with different projections or filters over the same graph).
-
-### 2.3 Apache Calcite
-
-Apache Calcite [9] is an open-source framework for query optimization and execution that serves as the query processing backbone for numerous data management systems including Apache Hive, Apache Flink, Apache Druid, and Trino. Calcite provides:
-
-- A *relational algebra* with extensible operators (`RelNode` hierarchy)
-- A *Volcano/Cascades-style cost-based optimizer* (`VolcanoPlanner`) with transformation and implementation rules
-- An *enumerable code-generation backend* that compiles relational plans into executable Java code via the Linq4j library
-- A *pluggable SQL parser* built on JavaCC
-
-Our extensions leverage all four components, adding new operators, rules, and runtime data structures while preserving backward compatibility with existing Calcite functionality.
-
----
-
-## 3. Literature Review
-
-This section surveys the two bodies of work that our system bridges---worst-case optimal join algorithms and multi-query optimization---as well as the query processing frameworks that provide the architectural substrate for integration.
-
-### 3.1 The Theory of Worst-Case Optimal Joins
-
-The theoretical study of join output size bounds has a rich history. The earliest tight bounds for natural join queries were established by Atserias, Grohe, and Marx [2] at FOCS 2008 (journal version in SIAM Journal on Computing, 2013). Their *AGM bound* shows that for a join query $Q$ over relations $R_1, \ldots, R_n$, the maximum output size is:
-
-$$|Q(D)| \leq \prod_{i=1}^{n} |R_i(D)|^{x_i^*}$$
-
-where $\mathbf{x}^*$ is the optimal solution to the *fractional edge cover* linear program over the query hypergraph. This bound is tight: for every query and set of cardinalities, there exists a database instance achieving it. The bound immediately implies that any algorithm running in time $O\left(\prod |R_i|^{x_i^*}\right)$ is *worst-case optimal*---it cannot be improved by more than a polynomial factor for any instance.
-
-Ngo, Porat, Re, and Rudra [3] (PODS 2012, JACM 2018) proved that a simple algorithm, `Generic-Join`, achieves this bound. Generic-Join processes variables one at a time, computing the intersection of candidate values across all relations that constrain each variable. Their proof proceeds by induction on the number of variables, using the AGM bound at each level to bound the work done.
-
-The theoretical landscape was further enriched by Ngo, Re, and Rudra's survey "Skew Strikes Back" [18], which unified the AGM bound with degree-based bounds (the *BRR bound*, named after Beame, Koutris, and Suciu), showed connections to information-theoretic entropy bounds, and introduced the *Minesweeper* algorithm---a certificate-based approach that can outperform Generic-Join on favorable instances by leveraging structural properties of the actual data (not just cardinalities). Ngo's invited PODS 2018 tutorial [24] provides a comprehensive overview of these developments, identifying open problems including adaptive variable ordering, handling inequality predicates, and extending WCOJ to aggregate queries.
-
-Beyond cardinality-based bounds, the notion of *hypertree width* and its generalizations provide finer-grained complexity measures for conjunctive queries. Gottlob, Leone, and Scarcello [21] showed that queries with bounded (generalized) hypertree width can be evaluated in polynomial time. The fractional hypertree width, introduced by Grohe and Marx, provides the tightest known width measure and connects directly to the AGM bound: a query achieves $|Q(D)| \leq |D|^{\text{fhtw}(Q)}$, where $\text{fhtw}$ is the fractional hypertree width.
-
-### 3.2 Practical WCOJ Implementations
+### 2.2 Practical WCOJ Implementations
 
 Translating worst-case optimal algorithms from theory to practice has been a decade-long effort, with several distinct architectural approaches.
 
-**Sorted trie approaches.** Veldhuizen [4] introduced *Leapfrog Triejoin* (ICDT 2014), the first practical WCOJ implementation. The key insight is that sorted tries enable a *leapfrog* intersection primitive: given $k$ sorted iterators, leapfrog advances them in round-robin fashion, using `seek` operations to skip past values that cannot appear in the intersection. For $k$ iterators with total size $N$ and intersection size $Z$, leapfrog runs in $O(N \cdot k \cdot \log(N/k) + Z)$. The algorithm was deployed in the LogicBlox commercial Datalog engine, where pre-sorted data representations made trie construction essentially free.
+**Sorted trie approaches.** Veldhuizen [4] introduced *Leapfrog Triejoin* (ICDT 2014), the first practical WCOJ implementation. The key insight is that sorted tries enable a *leapfrog* intersection primitive: given $k$ sorted iterators, leapfrog advances them in round-robin fashion, using `seek` operations to skip past values that cannot appear in the intersection. The algorithm was deployed in the LogicBlox commercial Datalog engine, where pre-sorted data representations made trie construction essentially free.
 
-**Graph-specialized engines.** Aberger et al. [14] developed *EmptyHeaded* (TODS 2017), a relational engine for graph processing built on WCOJ principles. EmptyHeaded introduced several systems innovations: (i) a columnar trie layout amenable to SIMD-accelerated set intersection, (ii) a generalized hypertree decomposition (GHD)-based query compiler that selects optimal variable orderings, and (iii) support for aggregation within the WCOJ loop. On graph pattern queries (triangles, 4-cliques, Lollipop), EmptyHeaded demonstrated order-of-magnitude speedups over binary-join engines. However, EmptyHeaded requires pre-computation of sorted indices and does not support general SQL workloads or ad-hoc query execution.
+**Graph-specialized engines.** Aberger et al. [14] developed *EmptyHeaded* (TODS 2017), a relational engine for graph processing built on WCOJ principles. EmptyHeaded introduced a columnar trie layout amenable to SIMD-accelerated set intersection and a GHD-based query compiler that selects optimal variable orderings. On graph pattern queries, EmptyHeaded demonstrated order-of-magnitude speedups over binary-join engines but requires pre-computation of sorted indices and does not support general SQL workloads.
 
-**Hash-based integration into general-purpose RDBMS.** Freitag, Bandle, Schmidt, Kemper, and Neumann [5] (PVLDB 2020) made the critical observation that WCOJ can be practical *within* a general-purpose RDBMS without requiring pre-sorted indices. Their key contributions were: (i) a hash-based WCOJ algorithm using hash tries that can be built during query execution (amortizing construction with first-use), (ii) a *hybrid optimizer* in the Umbra system (successor to HyPer) that transparently selects between binary and multi-way joins within the same query plan based on cost estimation, and (iii) a demonstration that the overhead of hash trie construction is acceptable for OLAP workloads. Their work is the closest precursor to our Calcite integration, though they did not consider multi-query optimization.
+**Hash-based integration into general-purpose RDBMS.** Freitag, Bandle, Schmidt, Kemper, and Neumann [5] (PVLDB 2020) made the critical observation that WCOJ can be practical *within* a general-purpose RDBMS without requiring pre-sorted indices. Their hash-based WCOJ algorithm in the Umbra system uses hash tries built during query execution, with a hybrid optimizer that transparently selects between binary and multi-way joins based on cost estimation. Their work is the closest precursor to our Calcite integration, though they did not consider multi-query optimization.
 
-**Unified approaches.** Wang, Willsey, and Suciu [15] (SIGMOD 2023) proposed *Free Join*, which unifies binary and worst-case optimal joins under a single algorithmic framework. Free Join uses a novel plan representation (the *free join plan*) and a data structure (*free join trie*) that generalizes both hash tables and sorted tries. The framework provides a principled way to select between binary and multi-way join strategies at the granularity of individual subproblems within a query, rather than the all-or-nothing approach of prior systems.
+**Unified approaches.** Wang, Willsey, and Suciu [15] (SIGMOD 2023) proposed *Free Join*, which unifies binary and worst-case optimal joins under a single algorithmic framework using a novel *free join trie* that generalizes both hash tables and sorted tries.
 
 **Table 1.** Comparison of WCOJ implementations.
 
@@ -125,35 +88,29 @@ Translating worst-case optimal algorithms from theory to practice has been a dec
 | Free Join [15] | Free join trie | No | Yes | Yes (unified) | No |
 | **This work** | **Hash trie** | **No** | **Yes** | **Yes** | **Yes** |
 
-### 3.3 Multi-Query Optimization
+### 2.3 Multi-Query Optimization
 
 Multi-query optimization (MQO) seeks to reduce redundant computation when processing multiple queries, either within a single complex query or across a batch of concurrent queries.
 
-**Foundations.** The problem was formalized by Sellis [6] (TODS 1988), who identified common sub-expressions across queries and proposed algorithms for selecting which intermediate results to materialize. Even earlier, Finkelstein [23] (SIGMOD 1982) studied common expression analysis in the context of integrity constraint checking, where a single update can trigger multiple constraint-verification queries with shared sub-computations. Both works established that MQO is fundamentally a *selection problem*: given a set of candidate materializations, choose a subset that maximizes total cost savings under resource constraints.
+**Foundations.** The problem was formalized by Sellis [6] (TODS 1988), who identified common sub-expressions across queries and proposed algorithms for selecting which intermediate results to materialize. Even earlier, Finkelstein [23] (SIGMOD 1982) studied common expression analysis in the context of integrity constraint checking. Both works established that MQO is fundamentally a *selection problem*: given a set of candidate materializations, choose a subset that maximizes total cost savings under resource constraints.
 
-**Complexity and approximation.** The MQO selection problem is NP-hard [7, 10], as it subsumes the weighted set cover problem. Kathuria and Sudarshan [7] (PODS 2017) provided the first provable approximation guarantees by reformulating MQO as a monotone submodular maximization problem, achieving a $(1 - 1/e)$ approximation ratio under a linear cost transformation. Their greedy algorithm can be integrated into existing transformation-based optimizers with modest overhead.
+**The selection problem.** MQO is NP-hard in general [7], as it subsumes the weighted set cover problem. Zinchenko and Ponomaryov [10] provide the most comprehensive recent survey, unifying view materialization, index selection, and plan caching under a common framework. They identify machine-learning-based approaches as a promising frontier and propose techniques to accelerate state-of-the-art selection algorithms. Kathuria and Sudarshan [7] (PODS 2017) provided the first provable approximation guarantees by reformulating MQO as a monotone submodular maximization problem, achieving a $(1 - 1/e)$ approximation ratio. Our work does not address the general MQO selection problem; instead, we exploit the specific structure of WCOJ computation---trie indices, variable-at-a-time search, and shared join graphs---to identify and eliminate redundancies within batches of cyclic join queries. This structural approach is complementary to selection-based MQO and could be integrated with selection algorithms for mixed workloads.
 
-**Heuristic approaches.** Roy, Seshadri, Sudarshan, and Bhobe [8] (SIGMOD 2000) demonstrated that heuristic MQO is practical and beneficial, proposing three cost-based algorithms---Volcano-SH (sharing heuristic), Volcano-RU (reuse), and a greedy approach---that extend the Volcano search strategy. Their experiments on TPC-D workloads showed significant cost reductions with acceptable optimization overhead. This line of work established that MQO can be implemented as a lightweight extension to existing optimizers rather than requiring a fundamentally different architecture.
+**Heuristic approaches.** Roy, Seshadri, Sudarshan, and Bhobe [8] (SIGMOD 2000) proposed cost-based algorithms---Volcano-SH, Volcano-RU, and a greedy approach---that extend the Volcano search strategy. Their experiments on TPC-D workloads showed significant cost reductions with acceptable overhead, establishing that MQO can be implemented as a lightweight extension to existing optimizers.
 
-**Algebraic and operator-based approaches.** Tu, Eslami, Xu, and Charkhgard [11] (IEEE BigData 2022) proposed *PsiDB*, which uses $\psi$-operators to algebraically combine multiple queries into a single global expression. Their approach reveals optimization opportunities through algebraic equivalence rules centered on the $\psi$-operator, achieving up to 36$\times$ speedup over sequential execution. Our `Combine` operator is philosophically similar to the $\psi$-operator but is specifically designed to compose with WCOJ execution rather than traditional binary joins.
+**Algebraic and operator-based approaches.** Tu, Eslami, Xu, and Charkhgard [11] (IEEE BigData 2022) proposed *PsiDB*, which uses $\psi$-operators to algebraically combine multiple queries into a single global expression, achieving up to 36$\times$ speedup. Our `Combine` operator is philosophically similar but is specifically designed to compose with WCOJ execution rather than traditional binary joins.
 
-**Work sharing at the execution level.** Harizopoulos, Shkapenyuk, and Ailamaki [22] (SIGMOD 2005) introduced *QPipe*, an operator-centric relational engine that shares work across concurrent queries at execution time through *on-demand simultaneous pipelining* (OSP). QPipe detects sharing opportunities dynamically (at runtime) rather than statically (at optimization time), complementing our compile-time approach. Our scan-sharing layer (Layer 1) achieves similar goals through a different mechanism: static common sub-expression detection followed by spool-based materialization.
+**Work sharing at the execution level.** Harizopoulos, Shkapenyuk, and Ailamaki [22] (SIGMOD 2005) introduced *QPipe*, an operator-centric relational engine that shares work across concurrent queries through *on-demand simultaneous pipelining* (OSP). QPipe detects sharing opportunities dynamically at runtime, complementing our compile-time approach.
 
-**Hybrid strategies.** Gurumurthy et al. [12] (Information Systems Frontiers 2024) explored hybrid MQO combining batched execution (shared sub-expression) with caching (materialized view reuse), finding that LRU caching combined with batching provides up to 2$\times$ speedup over sequential execution. Michiardi, Carra, and Migliorini [16] studied cache-based MQO for distributed computing frameworks, formulating the problem as a multiple-choice knapsack optimization. Schonberger, Trummer, and Mauerer [17] explored quantum-inspired annealing for large-scale MQO instances (up to 1,000 queries), demonstrating that specialized hardware solvers can scale MQO beyond the reach of classical algorithms.
+**Hybrid and scalable strategies.** Gurumurthy et al. [12] (Information Systems Frontiers 2024) explored hybrid MQO combining batched execution with materialized view reuse. Michiardi, Carra, and Migliorini [16] studied cache-based MQO for distributed computing frameworks, formulating the problem as a multiple-choice knapsack optimization. Schönberger, Trummer, and Mauerer [17] explored quantum-inspired annealing for large-scale MQO instances (up to 1,000 queries), demonstrating that specialized hardware solvers can scale MQO beyond the reach of classical algorithms.
 
-**Surveys.** Zinchenko and Ponomaryov [10] (2025) provide the most comprehensive recent survey of the MQO selection problem, unifying view materialization, index selection, and plan caching under a common framework. Their analysis identifies machine-learning-based approaches as a promising frontier and proposes techniques to exponentially accelerate state-of-the-art selection algorithms.
+### 2.4 Query Optimization Frameworks
 
-### 3.4 Query Optimization Frameworks
+Modern cost-based optimizers descend from two foundational systems. **System R** [1] (SIGMOD 1979) introduced dynamic programming for join ordering, cost-based plan enumeration, and the separation of logical and physical plan spaces. Graefe's *Volcano optimizer generator* [19] (ICDE 1993) introduced rule-based plan transformation with a top-down, goal-directed search strategy; the *Cascades framework* [20] refined Volcano with lazy evaluation and memoization. Apache Calcite [9] implements a hybrid Volcano/Cascades optimizer and serves as the query processing backbone for Apache Hive, Apache Flink, Apache Druid, Trino, and numerous other systems. Calcite provides a relational algebra with extensible operators (`RelNode` hierarchy), a cost-based optimizer (`VolcanoPlanner`), an enumerable code-generation backend via Linq4j, and a pluggable SQL parser built on JavaCC. Our extensions leverage all four components while preserving backward compatibility.
 
-The architectural substrate for both WCOJ integration and MQO is the query optimizer framework. Modern cost-based optimizers descend from two foundational systems.
+Tian [13] (2025) identifies three key trends in industrial query optimization: tighter feedback loops between optimization and execution, expansion from single-query to workload-level optimization, and composable architectures that enable cross-engine collaboration. Our work directly addresses the second trend by introducing workload-level optimization for WCOJ queries within the composable Calcite architecture.
 
-**System R** [1] (SIGMOD 1979) introduced the dynamic programming approach to join ordering, cost-based plan enumeration, and the separation of logical and physical plan spaces. Its influence persists in virtually every commercial and open-source RDBMS.
-
-**Volcano and Cascades.** Graefe's *Volcano optimizer generator* [19] (ICDE 1993) introduced rule-based plan transformation with a top-down, goal-directed search strategy. The *Cascades framework* [20] (IEEE Data Engineering Bulletin 1995) refined Volcano with lazy evaluation, memoization, and a cleaner separation between logical exploration and physical implementation. Apache Calcite [9] implements a hybrid Volcano/Cascades optimizer, making it a natural platform for our extensions.
-
-**Industrial trends.** Tian [13] (2025) identifies three key trends in industrial query optimization: (i) tighter feedback loops between optimization and execution (adaptive query processing), (ii) expansion from single-query to workload-level optimization (the convergence of QO and MQO), and (iii) composable architectures that enable cross-engine collaboration. Our work directly addresses trend (ii) by introducing workload-level optimization for WCOJ queries within the composable Calcite architecture.
-
-### 3.5 The Unexplored Intersection
+### 2.5 The Unexplored Intersection
 
 Despite the maturity of both WCOJ algorithms and MQO techniques, no prior work has combined them. This gap is surprising because the structure of WCOJ execution---trie-based indexing, variable-at-a-time search, and backtracking---creates sharing opportunities that are qualitatively different from those in binary-join workloads:
 
@@ -163,13 +120,13 @@ Despite the maturity of both WCOJ algorithms and MQO techniques, no prior work h
 
 3. **Variable-level factoring.** WCOJ's variable-at-a-time decomposition enables *prefix sharing*: computing shared variable bindings once and distributing them to per-query suffix executors. Binary joins operate at the tuple level and cannot be factored in this way.
 
-Our system exploits all three opportunities through the three-layer architecture described in Sections 6--7.
+Our system exploits all three opportunities through the three-layer architecture described in Sections 5--6.
 
 ---
 
-## 4. WCOJ Integration in Calcite
+## 3. WCOJ Integration in Calcite
 
-### 4.1 Operator Design
+### 3.1 Operator Design
 
 We introduce `EnumerableWCOJ`, a physical operator in the enumerable convention that implements multi-way joins using the WCOJ algorithm. Unlike binary join operators (`EnumerableHashJoin`, `EnumerableMergeJoin`), `EnumerableWCOJ` takes $N \geq 3$ inputs and processes them simultaneously.
 
@@ -183,7 +140,7 @@ where each pair $(i_k, f_k)$ indicates that input $i_k$'s field $f_k$ participat
 - $v_1 = \{(R, b), (S, b)\}$ -- the shared variable $b$
 - $v_2 = \{(S, c), (T, c)\}$ -- the shared variable $c$
 
-### 4.2 Cyclic Query Detection
+### 3.2 Cyclic Query Detection
 
 The conversion from standard relational algebra to `EnumerableWCOJ` is governed by `EnumerableWCOJRule`, which matches on `MultiJoin` nodes (produced by Calcite's `JoinToMultiJoinRule`). The rule fires only when:
 
@@ -195,7 +152,7 @@ The conversion from standard relational algebra to `EnumerableWCOJ` is governed 
 
 **Cyclicity test.** We construct an undirected graph where nodes are inputs and edges connect inputs that share at least one `JoinVariable`. A connected graph with $|E| \geq |V|$ contains at least one cycle (since a tree on $|V|$ nodes has exactly $|V| - 1$ edges). This simple test is sound and sufficient for our purposes, as WCOJ provides its primary advantage over binary joins precisely on cyclic query topologies.
 
-### 4.3 Multi-Level Hash Tries
+### 3.3 Multi-Level Hash Tries
 
 Our WCOJ implementation uses a purpose-built `HashTrie` data structure---a recursive hash map where each level corresponds to a join variable in the global variable ordering:
 
@@ -215,16 +172,26 @@ The trie supports three operations:
 
 Unlike Veldhuizen's sorted trie approach [4], our hash-based tries follow Freitag et al.'s insight [5] that hash-based structures can be built efficiently during query execution without requiring pre-sorted input or persistent indices.
 
-### 4.4 WCOJ Enumerator
+### 3.4 WCOJ Enumerator
 
 The `WCOJEnumerator` implements iterative deepening with backtracking over the global variable ordering. The core loop:
 
 ```
 moveNext():
-    Phase 1 (initialization):
-        for level = 0 to numVariables - 1:
+    Phase 1 (initialization with backtracking):
+        level <- 0
+        while level >= 0 and level < numVariables:
             initCandidatesAtLevel(level)
-            advanceAtLevel(level)
+            if advanceAtLevel(level):
+                level++
+            else:
+                level--                    // backtrack
+                while level >= 0:
+                    if advanceAtLevel(level):
+                        level++
+                        break
+                    level--
+        if level < 0: finished <- true; return false
 
     Phase 2 (yield + backtrack):
         loop:
@@ -238,13 +205,15 @@ moveNext():
                     currentLevel--  // exhausted, backtrack further
 ```
 
+The backtracking in Phase 1 is essential for correctness: a candidate value at level $k$ may have no valid continuations at level $k+1$ even though other candidates at level $k$ do. A naive linear initialization that gives up on the first failure would miss valid results on certain data distributions.
+
 The critical method is `initCandidatesAtLevel(level)`, which implements the intersection step from Generic-Join:
 
 $$\text{candidates}(x_k) = \bigcap_{R_i \ni x_k} \pi_{x_k}\left(\sigma_{x_1 = v_1, \ldots, x_{k-1} = v_{k-1}}(R_i)\right)$$
 
 Each trie lookup navigates using the prefix of already-bound variables relevant to that specific input, returning only values consistent with all prior bindings. The intersection across inputs ensures only values satisfying *all* join conditions survive.
 
-### 4.5 Cost Model
+### 3.5 Cost Model
 
 The cost of `EnumerableWCOJ` is modeled as:
 
@@ -254,13 +223,13 @@ where $C_{\text{build}}$ accounts for trie construction (linear scan of each inp
 
 ---
 
-## 5. The Combine Operator and Multi-Query Framework
+## 4. The Combine Operator and Multi-Query Framework
 
-### 5.1 Motivation
+### 4.1 Motivation
 
 When a workload consists of multiple queries over the same data---for example, five triangle queries over the same graph with different projections---traditional engines execute them independently. Each query builds its own hash tables, scans the same base tables, and performs the same join work. Even with WCOJ, the same trie structures are built redundantly and the same variable-binding search space is traversed multiple times.
 
-### 5.2 SQL Extension: MULTI()
+### 4.2 SQL Extension: MULTI()
 
 We extend Calcite's SQL parser with a `MULTI` construct that declares a batch of queries for joint optimization:
 
@@ -278,7 +247,7 @@ MULTI(
 
 The parser recognizes `MULTI` as a new keyword and produces a `SqlCall` with `SqlKind.MULTI`. During SQL-to-RelNode conversion, each sub-query is independently converted to a relational expression, and all are wrapped in a single `Combine` node.
 
-### 5.3 The Combine Relational Operator
+### 4.3 The Combine Relational Operator
 
 `Combine` is a new `AbstractRelNode` in Calcite's relational algebra that holds $N$ independent sub-queries as children. Its key design properties:
 
@@ -292,7 +261,7 @@ where $\tau_i$ is the row type of the $i$-th child. This encoding fits Calcite's
 
 **Novelty.** Standard Calcite has no multi-root operator. The closest analog is `UNION ALL`, but `Combine` preserves independent result sets without requiring compatible schemas. This is essential for MQO: the optimizer can see all queries simultaneously and identify sharing opportunities that are invisible when queries are optimized in isolation.
 
-### 5.4 Physical Implementation
+### 4.4 Physical Implementation
 
 `EnumerableCombine` implements code generation for the `Combine` operator. During `implement()`, it:
 
@@ -305,7 +274,7 @@ The `TrieCache` creation in step 1 is the critical bridge for cross-query optimi
 
 ---
 
-## 6. Three Layers of Shared Computation
+## 5. Three Layers of Shared Computation
 
 When multiple WCOJ queries execute within a `Combine`, three layers of optimization eliminate redundant work at progressively higher levels of abstraction:
 
@@ -327,7 +296,7 @@ When multiple WCOJ queries execute within a `Combine`, three layers of optimizat
 +-----------------------------------------------------+
 ```
 
-### 6.1 Layer 1: Scan Sharing via Lazy Spools
+### 5.1 Layer 1: Scan Sharing via Lazy Spools
 
 **Problem.** When multiple queries within a `Combine` scan the same base table, each scan reads the data independently, multiplying I/O cost by the number of queries.
 
@@ -352,7 +321,7 @@ Combine                          Combine
 
 The spool ensures each distinct base-table scan executes exactly once. Crucially, spools produce the same Java object reference for all consumers, enabling Layer 2.
 
-### 6.2 Layer 2: Trie Cache
+### 5.2 Layer 2: Trie Cache
 
 **Problem.** Even after scan sharing, each WCOJ operator independently builds a `HashTrie` from its inputs. If two WCOJ operators join the same relation on the same key, they build identical tries.
 
@@ -378,15 +347,13 @@ The design is deliberately simple:
 - **Lazy construction.** `getOrBuild` computes on first access; subsequent calls return the cached trie.
 - **Lifecycle.** Created by `EnumerableCombine.implement()`, passed to all child WCOJ operators, garbage-collected after execution.
 
-The `TrieCache` extends Veldhuizen's per-relation trie construction [4] to the multi-query setting: instead of each query building its own tries, the cache amortizes construction across all queries in the `Combine`.
-
-### 6.3 Layer 3: Shared-Prefix Execution
+### 5.3 Layer 3: Shared-Prefix Execution
 
 **Problem.** Two WCOJ operators may enumerate the same variable prefix identically. For example, two triangle queries over the same graph might share all three join variables and differ only in their output projections. Without sharing, both operators independently traverse the same backtracking search space.
 
 **Solution.** Detect shared prefixes at compile time via fingerprinting, compute the prefix once at runtime, and distribute the bindings to per-query suffix executors.
 
-#### 6.3.1 Join Variable Fingerprinting
+#### 5.3.1 Join Variable Fingerprinting
 
 To compare variables across different WCOJ operators, we need a canonical representation that is independent of operator-local input numbering. `JoinVariableFingerprint` achieves this by using the *structural digest* (`RelDigest`) of each input `RelNode`:
 
@@ -394,7 +361,7 @@ $$\text{fingerprint}(v) = \text{sort}\left(\left\{(\text{digest}(R_{i_k}), f_k) 
 
 Two fingerprints are equal when they represent the same key intersection over structurally identical inputs. This invariant makes prefix detection correct: if fingerprints match at positions $0, \ldots, K{-}1$, the WCOJ backtracking search over those variables produces identical bindings.
 
-#### 6.3.2 Prefix Group Detection
+#### 5.3.2 Prefix Group Detection
 
 Given $N$ WCOJ operators, `WCOJPrefixAnalyzer` builds a *trie of fingerprint sequences* to find shared prefixes:
 
@@ -414,7 +381,7 @@ Result: PrefixGroup(depth=2, members=[0, 1])
 
 The `extractGroups` traversal finds *divergence points*---nodes where `|children| > 1`---and groups all descendant queries. Groups with $\text{depth} \geq 1$ and $|\text{members}| \geq 2$ represent opportunities for shared-prefix execution.
 
-#### 6.3.3 Two-Phase Execution
+#### 5.3.3 Two-Phase Execution
 
 Once prefix groups are detected, `EnumerableCombineWCOJPrefixRule` replaces grouped WCOJ operators with `EnumerableWCOJWithPrefix`, which generates code for two-phase execution:
 
@@ -442,9 +409,9 @@ The `floor` parameter prevents backtracking below the prefix boundary, confining
 
 ---
 
-## 7. Formal Analysis
+## 6. Formal Analysis
 
-### 7.1 Correctness of Prefix Sharing
+### 6.1 Correctness of Prefix Sharing
 
 **Theorem 1.** *Let $Q_1$ and $Q_2$ be two WCOJ queries with variable orderings $(x_1, \ldots, x_m)$ and $(x_1, \ldots, x_K, y_{K+1}, \ldots, y_{m'})$ respectively, such that variables $x_1, \ldots, x_K$ have identical fingerprints. Then the prefix bindings $\{(v_1, \ldots, v_K)\}$ computed by $Q_1$'s prefix enumerator are exactly the prefix bindings that $Q_2$'s full enumerator would produce for its first $K$ variables.*
 
@@ -454,7 +421,7 @@ $$\text{candidates}(x_k \mid v_1, \ldots, v_{k-1}) = \bigcap_{R_i \ni x_k} \text
 
 Since fingerprints match at positions $0, \ldots, K{-}1$, the participating inputs and their structural digests are identical. Combined with the `TrieCache` (which ensures identical inputs produce the same trie objects), the candidate sets are identical at each prefix level. Therefore the search trees are isomorphic up to depth $K$. $\square$
 
-### 7.2 Cost Analysis
+### 6.2 Cost Analysis
 
 Let $P$ denote the cost of computing the shared prefix (iterating all valid $(v_1, \ldots, v_K)$ bindings), let $S_i$ denote the suffix cost for query $Q_i$, and let $N$ denote the number of queries in the prefix group.
 
@@ -466,21 +433,21 @@ where $C_{\text{trie}}$ is the per-query trie construction cost.
 
 **With all three layers:**
 
-$$C_{\text{shared}} = P + N \cdot \bar{S} + C_{\text{trie}} + C_{\text{cache}}$$
+$$C_{\text{shared}} = P + N \cdot \bar{S} + C_{\text{trie}} + C_{\text{cache}} + C_{\text{coord}}$$
 
-where $C_{\text{cache}}$ is the negligible `TrieCache` lookup overhead (hash map operations).
+where $C_{\text{cache}}$ is the `TrieCache` lookup overhead and $C_{\text{coord}}$ captures the constant-factor cost of prefix-sharing coordination (binding materialization, spool management, per-binding dispatch to suffix executors).
 
 **Savings:**
 
-$$\Delta C = (N - 1) \cdot P + (N - 1) \cdot C_{\text{trie}}$$
+$$\Delta C = (N - 1) \cdot P + (N - 1) \cdot C_{\text{trie}} - C_{\text{coord}}$$
 
-The prefix cost $P$ dominates when the prefix covers most of the variables---the common case for queries that differ only in their final projection, aggregation, or filter on non-join columns. For $N$ identical triangle queries differing only in projection, $K = 3 = m$ (all variables shared), so $\bar{S} \approx 0$ and the savings approach $(N-1) \cdot C_{\text{full\_WCOJ}}$: nearly linear speedup in the batch size.
+The prefix cost $P$ dominates when the prefix covers most of the variables---the common case for queries that differ only in their final projection, aggregation, or filter on non-join columns. For $N$ identical triangle queries differing only in projection, $K = 3 = m$ (all variables shared), so $\bar{S} \approx 0$ and the savings approach $(N-1) \cdot C_{\text{full\_WCOJ}} - C_{\text{coord}}$. The coordination overhead $C_{\text{coord}}$ is proportional to the output size rather than amortized across queries, so the net benefit depends on $N$ being large enough for the $(N-1) \cdot P$ savings to dominate.
 
 ---
 
-## 8. Experimental Evaluation
+## 7. Experimental Evaluation
 
-### 8.1 Experimental Setup
+### 7.1 Experimental Setup
 
 We evaluate our system using a custom benchmark (`WCOJBenchmarkCli`) that compares four execution modes:
 
@@ -497,136 +464,84 @@ We evaluate our system using a custom benchmark (`WCOJBenchmarkCli`) that compar
 
 **Hardware and software.** All experiments are run on an Apple M4 Pro (14 cores) with 48 GB RAM, OpenJDK 21.0.9, and JVM heap limited to 2 GB (`-Xmx2g`). Calcite version is 1.41.0-SNAPSHOT.
 
-### 8.2 Results
+### 7.2 Results
 
-All timings are reported as the mean over 10 iterations after 3 warmup rounds. Standard deviations are shown in parentheses. The workload consists of triangle queries $Q_\triangle(a,b,c) \leftarrow R(a,b), S(b,c), T(c,a)$ with 5 projection variations batched via `MULTI()`.
+All timings are reported as the mean over 10 iterations after 3 warmup rounds. The workload consists of triangle queries $Q_\triangle(a,b,c) \leftarrow R(a,b), S(b,c), T(c,a)$ with 5 projection variations batched via `MULTI()`.
 
-#### 8.2.1 Scalability with Graph Size
+#### 7.2.1 Scalability with Graph Size
 
-We fix the query batch size at $N = 5$ and vary graph size from 50 to 400 nodes, scaling edge counts proportionally (300, 800, 2000, 5000 edges respectively) with 5% hub nodes. Table 2 reports mean execution time in milliseconds.
+We fix the query batch size at $N = 5$ and vary graph size from 50 to 400 nodes, scaling edge counts proportionally with 5% hub nodes.
 
-**Table 2.** Execution time (ms) vs. graph size, $N = 5$ triangle queries. Mean $\pm$ std. dev. over 10 iterations.
+**Table 2.** Execution time (ms) and speedup vs. graph size, $N = 5$ triangle queries. Speedup over baseline shown in parentheses.
 
-| Graph Size ($|V|$, $|E|$) | Triangle Count | Baseline | WCOJ | Combine | Combine-Share |
+| Graph | Triangles | Baseline | WCOJ | Combine | Combine-Share |
 |:---:|:---:|:---:|:---:|:---:|:---:|
-| 50, 300 | 1,665 | 185.5 $\pm$ 31.2 | 156.7 $\pm$ 33.5 | 99.9 $\pm$ 40.0 | 150.7 $\pm$ 46.0 |
-| 100, 800 | 4,995 | 139.6 $\pm$ 9.7 | 95.2 $\pm$ 21.5 | 56.5 $\pm$ 10.0 | 86.2 $\pm$ 20.6 |
-| 200, 2000 | 9,270 | 268.2 $\pm$ 27.7 | 177.0 $\pm$ 29.2 | 138.2 $\pm$ 23.4 | 177.0 $\pm$ 21.6 |
-| 400, 5000 | 17,625 | 1,158.0 $\pm$ 189.1 | 352.4 $\pm$ 69.7 | 289.5 $\pm$ 42.0 | 339.2 $\pm$ 39.3 |
-
-**Table 3.** Speedup over baseline (higher is better).
-
-| Graph Size | WCOJ | Combine | Combine-Share |
-|:---:|:---:|:---:|:---:|
-| 50, 300 | 1.18$\times$ | 1.86$\times$ | 1.23$\times$ |
-| 100, 800 | 1.47$\times$ | 2.47$\times$ | 1.62$\times$ |
-| 200, 2000 | 1.52$\times$ | 1.94$\times$ | 1.52$\times$ |
-| 400, 5000 | **3.29$\times$** | **4.00$\times$** | **3.41$\times$** |
+| 50 / 300 | 333 | 186 | 157 (1.2x) | 100 (1.9x) | 151 (1.2x) |
+| 100 / 800 | 999 | 140 | 95 (1.5x) | 57 (2.5x) | 86 (1.6x) |
+| 200 / 2000 | 1,854 | 268 | 177 (1.5x) | 138 (1.9x) | 177 (1.5x) |
+| 400 / 5000 | 3,525 | 1,158 | 352 (**3.3x**) | 290 (**4.0x**) | 339 (**3.4x**) |
 
 **Analysis.** The results reveal consistent and growing speedups as graph size increases:
 
-- **Baseline degrades super-linearly.** Execution time grows from 186 ms at $|V|=50$ to 1,158 ms at $|V|=400$---a 6.2$\times$ increase for a 10.6$\times$ increase in triangle count. This reflects the well-known intermediate result explosion in binary hash joins on cyclic queries: the two-way join $R \bowtie S$ produces $O(|R| \cdot |S| / |V|)$ intermediate tuples, many of which are subsequently eliminated by the third join.
+- **Baseline degrades super-linearly.** Execution time grows from 186 ms at $|V|=50$ to 1,158 ms at $|V|=400$---a 6.2x increase for a 10.6x increase in triangle count (333 to 3,525 per query). This reflects the well-known intermediate result explosion in binary hash joins on cyclic queries: the two-way join $R \bowtie S$ produces $O(|R| \cdot |S| / |V|)$ intermediate tuples, many of which are subsequently eliminated by the third join.
 
-- **WCOJ scales sub-linearly.** WCOJ execution time grows from 157 ms to 352 ms across the size range---a 2.2$\times$ increase for a 10.6$\times$ increase in triangle count. This sub-linear scaling is consistent with the worst-case optimal bound: WCOJ runtime is proportional to $|output| + |input|$ rather than intermediate result size. The speedup over baseline increases from 1.18$\times$ at $|V|=50$ to **3.29$\times$** at $|V|=400$, demonstrating that the advantage of avoiding intermediate result materialization compounds as the join graph becomes denser.
+- **WCOJ scales sub-linearly.** WCOJ execution time grows from 157 ms to 352 ms across the size range---a 2.2x increase for a 10.6x increase in triangle count (333 to 3,525). This sub-linear scaling is consistent with the worst-case optimal bound: WCOJ runtime is proportional to $|output| + |input|$ rather than intermediate result size. The speedup over baseline increases from 1.2x at $|V|=50$ to **3.3x** at $|V|=400$, demonstrating that the advantage of avoiding intermediate result materialization compounds as the join graph becomes denser.
 
-- **Combine dominates at all sizes.** The `Combine` operator consistently outperforms sequential WCOJ execution, demonstrating that batched execution eliminates per-query overhead (connection setup, plan compilation, result materialization) even without shared computation. Combine achieves the best overall speedup at every graph size, reaching **4.00$\times$** over baseline at $|V|=400$.
+- **Combine dominates at all sizes.** The `Combine` operator consistently outperforms sequential WCOJ execution, demonstrating that batched execution eliminates per-query overhead (connection setup, plan compilation, result materialization) even without shared computation. Combine achieves the best overall speedup at every graph size, reaching **4.0x** over baseline at $|V|=400$.
 
-- **Combine-Share tracks Combine.** The shared-prefix mode achieves speedups comparable to plain Combine (3.41$\times$ vs. 4.00$\times$ at $|V|=400$). At this batch size ($N=5$), the overhead of fingerprint computation and prefix coordination offsets some of the sharing benefit. The marginal cost of the sharing infrastructure suggests that Combine-Share is better suited to larger batch sizes, where the one-time prefix computation is amortized across more queries (see Section 8.2.2).
+- **Combine-Share tracks Combine.** The shared-prefix mode achieves speedups comparable to plain Combine (3.4x vs. 4.0x at $|V|=400$). At this batch size ($N=5$), the overhead of fingerprint computation and prefix coordination offsets some of the sharing benefit. The marginal cost of the sharing infrastructure suggests that Combine-Share is better suited to larger batch sizes, where the one-time prefix computation is amortized across more queries (see Section 7.2.2).
 
-#### 8.2.2 Multi-Query Speedup
+#### 7.2.2 Multi-Query Speedup
 
-We fix the graph at $|V|=200$, $|E|=2000$ and vary the number of batched triangle queries from $N=2$ to $N=20$. Table 4 reports execution times. Note: the `combine-share` mode encounters a type-equivalence assertion in the Volcano planner for $N > 5$ due to a known limitation in `CombineSharedComponentsRule` when sub-queries with aliased projections are merged; results for that mode are reported only where available.
+We fix the graph at $|V|=200$, $|E|=2000$ and vary the number of batched triangle queries from $N=2$ to $N=20$. The `combine-share` mode encounters a type-equivalence assertion in the Volcano planner for $N > 5$ due to a known limitation in `CombineSharedComponentsRule`; results for that mode are reported only where available.
 
-**Table 4.** Execution time (ms) vs. query batch size, $|V|=200$, $|E|=2000$.
+**Table 3.** Execution time (ms), speedup, and per-query cost vs. query batch size. Speedup over baseline in parentheses.
 
-| Queries ($N$) | Baseline | WCOJ | Combine | Combine-Share |
-|:---:|:---:|:---:|:---:|:---:|
-| 2 | 146.6 $\pm$ 19.8 | 97.4 $\pm$ 24.8 | 75.1 $\pm$ 13.8 | 66.8 $\pm$ 8.5 |
-| 5 | 268.2 $\pm$ 27.7 | 177.0 $\pm$ 29.2 | 138.2 $\pm$ 23.4 | 177.0 $\pm$ 21.6 |
-| 10 | 410.2 $\pm$ 67.3 | 253.4 $\pm$ 35.0 | 182.7 $\pm$ 22.0 | --- |
-| 20 | 647.0 $\pm$ 60.2 | 341.3 $\pm$ 28.0 | 231.9 $\pm$ 26.4 | --- |
+| $N$ | Baseline | WCOJ | Combine | Combine-Share | Per-query: Baseline | Per-query: Combine |
+|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| 2 | 147 | 97 (1.5x) | 75 (2.0x) | 67 (**2.2x**) | 73.3 | 37.6 |
+| 5 | 268 | 177 (1.5x) | 138 (1.9x) | 177 (1.5x) | 53.6 | 27.6 |
+| 10 | 410 | 253 (1.6x) | 183 (**2.2x**) | --- | 41.0 | **18.3** |
+| 20 | 647 | 341 (1.9x) | 232 (**2.8x**) | --- | 32.4 | **11.6** |
 
-**Table 5.** Speedup over baseline vs. query batch size.
+**Analysis.** The per-query amortized cost reveals the key benefit of batched WCOJ execution. For the `Combine` mode, the per-query cost drops from 37.6 ms at $N=2$ to **11.6 ms** at $N=20$---a 3.2x reduction. This sub-linear scaling demonstrates that the `Combine` operator successfully amortizes fixed costs (connection setup, plan compilation, trie construction) across the batch.
 
-| Queries ($N$) | WCOJ | Combine | Combine-Share |
-|:---:|:---:|:---:|:---:|
-| 2 | 1.51$\times$ | 1.95$\times$ | **2.19$\times$** |
-| 5 | 1.52$\times$ | 1.94$\times$ | 1.52$\times$ |
-| 10 | 1.62$\times$ | **2.25$\times$** | --- |
-| 20 | 1.90$\times$ | **2.79$\times$** | --- |
+The WCOJ speedup over baseline grows steadily with batch size, from 1.5x at $N=2$ to 1.9x at $N=20$, indicating that WCOJ's advantage is amplified when many queries exercise the same join structure. The `Combine` mode amplifies this further: its speedup increases from 2.0x at $N=2$ to **2.8x** at $N=20$, with total execution time (232 ms) less than **36%** of the baseline (647 ms) despite executing 20 full triangle queries.
 
-**Table 6.** Per-query amortized cost (ms/query).
+At $N=2$, `Combine-Share` achieves the best overall speedup (**2.2x**), demonstrating that even small batches benefit from shared computation when the prefix covers all three join variables. For $N=5$, the sharing overhead offsets the benefit at this graph size ($|V|=200$), yielding a 1.5x ratio equal to plain WCOJ. The current type-equivalence limitation for $N > 5$ is an engineering issue in the `CombineSharedComponentsRule`---not a fundamental algorithmic limitation---and is targeted for resolution in future work.
 
-| Queries ($N$) | Baseline | WCOJ | Combine | Combine-Share |
-|:---:|:---:|:---:|:---:|:---:|
-| 2 | 73.3 | 48.7 | 37.6 | 33.4 |
-| 5 | 53.6 | 35.4 | 27.6 | 35.4 |
-| 10 | 41.0 | 25.3 | **18.3** | --- |
-| 20 | 32.4 | 17.1 | **11.6** | --- |
-
-**Analysis.** The per-query amortized cost (Table 6) reveals the key benefit of batched WCOJ execution. For the `Combine` mode, the per-query cost drops from 37.6 ms at $N=2$ to **11.6 ms** at $N=20$---a 3.2$\times$ reduction in per-query overhead. This sub-linear scaling demonstrates that the `Combine` operator successfully amortizes fixed costs (connection setup, plan compilation, trie construction) across the batch.
-
-The WCOJ speedup over baseline grows steadily with batch size, from 1.51$\times$ at $N=2$ to 1.90$\times$ at $N=20$, indicating that WCOJ's advantage is amplified when many queries exercise the same join structure. The `Combine` mode amplifies this further: its speedup increases from 1.95$\times$ at $N=2$ to **2.79$\times$** at $N=20$, with total execution time (231.9 ms) less than **36%** of the baseline (647.0 ms) despite executing 20 full triangle queries.
-
-At $N=2$, `Combine-Share` achieves the best overall speedup (**2.19$\times$**), demonstrating that even small batches benefit from shared computation when the prefix covers all three join variables. For $N=5$, the sharing overhead offsets the benefit at this graph size ($|V|=200$), yielding a 1.52$\times$ ratio equal to plain WCOJ. The current type-equivalence limitation for $N > 5$ is an engineering issue in the `CombineSharedComponentsRule`---not a fundamental algorithmic limitation---and is targeted for resolution in future work.
-
-#### 8.2.3 Layer-by-Layer Contribution
+#### 7.2.3 Layer-by-Layer Contribution
 
 The four modes form a natural ablation study, isolating the contribution of each optimization layer:
 
-**Table 7.** Layer-by-layer savings at $|V|=400$, $N=5$.
+**Table 4.** Layer-by-layer contribution at $|V|=400$, $N=5$.
 
-| Comparison | What's Added | Time (ms) | Incremental Speedup |
-|:---:|:---|:---:|:---:|
-| Baseline | --- | 1,158.0 | --- |
-| WCOJ | Multi-way join algorithm | 352.4 | 3.29$\times$ over baseline |
-| Combine | + Batched execution | 289.5 | 1.22$\times$ over WCOJ |
-| Combine-Share | + Scan sharing + Trie caching + Prefix sharing | 339.2 | 0.85$\times$ over Combine |
+| Layer | What's Added | Time (ms) | Incremental Speedup |
+|:---|:---|:---:|:---:|
+| Baseline | --- | 1,158 | --- |
+| WCOJ | Multi-way join algorithm | 352 | 3.3x over baseline |
+| Combine | + Batched execution | 290 | 1.2x over WCOJ |
+| Combine-Share | + Scan sharing + Trie caching + Prefix sharing | 339 | 0.85x over Combine |
 
-**Analysis.** The dominant optimization is the WCOJ algorithm itself, which eliminates the intermediate result explosion that plagues binary joins on cyclic queries, delivering a **3.29$\times$** speedup. The `Combine` operator provides an additional 1.22$\times$ improvement by amortizing per-query overhead across the batch. At this batch size ($N=5$), the three sharing layers do not yield a net benefit over plain Combine: the 0.85$\times$ ratio indicates that fingerprint computation, prefix coordination, and trie cache management overhead exceed the savings from shared-prefix execution. As discussed in Section 7.2, the sharing benefit grows with batch size $N$ and prefix depth $K/m$; the $N=2$ result (Table 5) confirms that Combine-Share can outperform Combine when its overhead is proportionally smaller relative to the shared work.
+**Analysis.** The dominant optimization is the WCOJ algorithm itself, which eliminates the intermediate result explosion that plagues binary joins on cyclic queries, delivering a **3.3x** speedup. The `Combine` operator provides an additional 1.2x improvement by amortizing per-query overhead across the batch. At this batch size ($N=5$), the three sharing layers do not yield a net benefit over plain Combine: the 0.85x ratio indicates that sharing overhead exceeds the savings. This result appears to contradict the formal cost model (Section 6.2), which predicts savings of $(N-1) \cdot P$ when all variables are shared ($K = m$, $\bar{S} \approx 0$). The discrepancy arises because the cost model's coordination overhead term $C_{\text{coord}}$ is non-negligible: the prefix enumerator must materialize and iterate over bindings (rather than directly producing output rows), the `CombineSharedComponentsRule` introduces additional spool operators, and prefix-group coordination requires per-binding dispatch to suffix executors. These costs are proportional to the output size (not amortized across queries), causing Combine-Share's per-query cost to remain roughly flat (33.4 ms at $N=2$, 35.4 ms at $N=5$) while plain Combine's per-query cost drops with $N$ (37.6 ms to 27.6 ms) due to trie construction amortization. The $N=2$ result (Table 3) confirms that Combine-Share outperforms plain Combine when the fixed sharing overhead is proportionally smaller relative to per-query execution cost.
 
-#### 8.2.4 Variance and Stability
+#### 7.2.4 Variance and Stability
 
-An important practical consideration is execution time stability. Table 8 reports the coefficient of variation (CV = $\sigma / \mu$) for each mode.
-
-**Table 8.** Coefficient of variation across graph sizes.
-
-| Graph Size | Baseline | WCOJ | Combine | Combine-Share |
-|:---:|:---:|:---:|:---:|:---:|
-| 50, 300 | 0.17 | 0.21 | 0.40 | 0.31 |
-| 100, 800 | 0.07 | 0.23 | 0.18 | 0.24 |
-| 200, 2000 | 0.10 | 0.16 | 0.17 | 0.12 |
-| 400, 5000 | 0.16 | 0.20 | 0.15 | 0.12 |
-
-**Analysis.** At small graph sizes ($|V|=50$), all modes exhibit higher variance due to JVM warm-up effects and the short absolute execution times. As graph size increases, variance stabilizes: at $|V| \geq 200$, Combine and Combine-Share achieve CV $\leq 0.17$, with Combine-Share showing the lowest variance at the largest size (CV = 0.12). Baseline maintains moderate stability (CV = 0.07--0.17) across all sizes. The higher WCOJ variance at $|V|=100$ (CV = 0.23) likely reflects JVM JIT compilation effects on the trie traversal hot path, which stabilizes at larger sizes as the JIT optimizations converge.
+Execution time stability is an important practical consideration. The coefficient of variation (CV = $\sigma / \mu$) across graph sizes ranges from 0.07 to 0.40, with higher variance at small graph sizes ($|V|=50$) due to JVM warm-up effects and short absolute execution times. At $|V| \geq 200$, all modes stabilize: Combine and Combine-Share achieve CV $\leq 0.17$, with Combine-Share showing the lowest variance at the largest size (CV = 0.12). The higher WCOJ variance at $|V|=100$ (CV = 0.23) likely reflects JVM JIT compilation effects on the trie traversal hot path, which stabilizes at larger sizes as optimizations converge.
 
 ---
 
-## 9. Related Work and Positioning
-
-### 9.1 Positioning Against WCOJ Systems
-
-As surveyed in Section 3.2, prior WCOJ implementations---Leapfrog Triejoin [4], EmptyHeaded [14], Umbra [5], and Free Join [15]---focus exclusively on single-query optimization. Our work is closest to Freitag et al. [5] in its hash-based approach and integration into a cost-based optimizer. However, we extend beyond single-query optimization to the multi-query setting, introducing three layers of cross-query sharing (scan spooling, trie caching, prefix sharing) that have no analog in any prior WCOJ system. Table 1 in Section 3.2 summarizes this distinction.
-
-### 9.2 Positioning Against MQO Systems
-
-Prior MQO systems (Section 3.3) operate on traditional binary-join plans and share work at the scan or intermediate-result level [6, 8, 11, 22]. Our `Combine` operator and three-layer sharing architecture differ in that they exploit the *structure of WCOJ computation*---particularly the trie data structures and variable-at-a-time search---to identify and eliminate redundancies that are invisible to traditional MQO techniques. The prefix-sharing mechanism (Layer 3) is entirely novel: it factors the WCOJ search space into shared and per-query components, a decomposition that has no counterpart in binary-join MQO.
-
-### 9.3 Positioning Within Calcite
-
-Apache Calcite [9] provides the modular, extensible foundation on which our work builds. Our extensions---the `Combine` operator, `MULTI()` syntax, `EnumerableWCOJ`, and the three sharing rules---are implemented as standard Calcite `RelNode` subclasses and `RelRule` instances, preserving full backward compatibility. This demonstrates that Calcite's architecture can accommodate fundamentally new execution paradigms (multi-way joins, multi-query batching) without requiring changes to the core optimizer infrastructure.
-
----
-
-## 10. Conclusion
+## 8. Conclusion
 
 We have presented a unified framework within Apache Calcite that combines worst-case optimal join algorithms with multi-query optimization. Our system introduces the `Combine` relational operator and `MULTI()` SQL syntax for declarative multi-query batching, a hash-based WCOJ implementation with multi-level trie indexing, and three layers of cross-query optimization: scan sharing via lazy spools, identity-based trie caching, and shared-prefix execution through join-variable fingerprinting.
 
-The key insight underlying our approach is that WCOJ's variable-at-a-time execution model creates natural sharing opportunities that do not exist in binary join plans. When multiple queries join the same relations on the same keys, they traverse identical search trees---a redundancy that our prefix-sharing mechanism eliminates. Combined with scan sharing and trie caching at the lower layers, the system achieves near-linear speedup with batch size for structurally similar query workloads.
+The key insight underlying our approach is that WCOJ's variable-at-a-time execution model creates natural sharing opportunities that do not exist in binary join plans. When multiple queries join the same relations on the same keys, they traverse identical search trees---a redundancy that our prefix-sharing mechanism eliminates. Combined with scan sharing and trie caching at the lower layers, the `Combine` operator achieves strong sub-linear scaling: per-query amortized cost drops 3.2x as batch size grows from 2 to 20, reaching a 2.8x overall speedup over sequential binary joins at $N=20$.
+
+Our work does not address the general MQO selection problem [10]; rather, it exploits the specific structure of WCOJ execution to identify sharing opportunities within batches of cyclic join queries. This structural approach is complementary to selection-based MQO techniques and could be integrated with them for mixed workloads containing both cyclic and acyclic queries.
 
 All contributions are implemented as modular extensions to Apache Calcite, preserving backward compatibility and enabling adoption by the numerous systems built on the Calcite framework. The source code is available as open-source contributions to the Calcite project.
 
-**Future work.** Several directions remain open: (1) extending the cost model to account for memory pressure from concurrent trie construction, (2) exploring adaptive variable ordering that considers both single-query and cross-query optimization objectives, (3) integrating with Calcite's materialized view subsystem for persistent cross-batch sharing, and (4) extending the `Combine` operator to support heterogeneous join strategies (e.g., WCOJ for cyclic components and binary joins for acyclic components within the same batch).
+**Future work.** Several directions remain open: (1) resolving the type-equivalence assertion in `CombineSharedComponentsRule` for batches with $N > 5$ aliased-projection sub-queries, which currently prevents evaluating Combine-Share at larger batch sizes; (2) reducing the coordination overhead $C_{\text{coord}}$ of prefix sharing through direct binding propagation rather than materialization; (3) exploring adaptive variable ordering that considers both single-query and cross-query optimization objectives; (4) integrating with Calcite's materialized view subsystem for persistent cross-batch sharing; and (5) extending the `Combine` operator to support heterogeneous join strategies (e.g., WCOJ for cyclic components and binary joins for acyclic components within the same batch).
 
 ---
 
@@ -638,9 +553,9 @@ All contributions are implemented as modular extensions to Apache Calcite, prese
 
 [3] H. Q. Ngo, E. Porat, C. Re, and A. Rudra, "Worst-case optimal join algorithms," *Journal of the ACM*, vol. 65, no. 3, pp. 1--40, 2018. doi: [10.1145/3180143](https://doi.org/10.1145/3180143)
 
-[4] T. L. Veldhuizen, "Leapfrog Triejoin: A simple, worst-case optimal join algorithm," in *Proc. 17th International Conference on Database Theory (ICDT)*, Athens, Greece, 2014, pp. 96--106. doi: [10.4230/LIPIcs.ICDT.2014.173](https://doi.org/10.4230/LIPIcs.ICDT.2014.173)
+[4] T. L. Veldhuizen, "Leapfrog Triejoin: A simple, worst-case optimal join algorithm," in *Proc. 17th International Conference on Database Theory (ICDT)*, Athens, Greece, 2014, pp. 96--106. Available: [https://openproceedings.org/ICDT/2014/paper_13.pdf](https://openproceedings.org/ICDT/2014/paper_13.pdf)
 
-[5] M. Freitag, M. Bandle, T. Schmidt, A. Kemper, and T. Neumann, "Adopting worst-case optimal joins in relational database systems," *Proceedings of the VLDB Endowment*, vol. 13, no. 12, pp. 1891--1904, 2020. doi: [10.14778/3407790.3407797](https://doi.org/10.14778/3407790.3407797)
+[5] M. Freitag, M. Bandle, T. Schmidt, A. Kemper, and T. Neumann, "Adopting worst-case optimal joins in relational database systems," *Proceedings of the VLDB Endowment*, vol. 13, no. 11, pp. 1891--1904, 2020. doi: [10.14778/3407790.3407797](https://doi.org/10.14778/3407790.3407797)
 
 [6] T. K. Sellis, "Multiple-query optimization," *ACM Transactions on Database Systems*, vol. 13, no. 1, pp. 23--52, 1988. doi: [10.1145/42201.42203](https://doi.org/10.1145/42201.42203)
 
@@ -662,9 +577,9 @@ All contributions are implemented as modular extensions to Apache Calcite, prese
 
 [15] Y. R. Wang, M. Willsey, and D. Suciu, "Free Join: Unifying worst-case optimal and traditional joins," *Proceedings of the ACM on Management of Data*, vol. 1, no. 2, Article 150, 2023. doi: [10.1145/3589295](https://doi.org/10.1145/3589295)
 
-[16] P. Michiardi, D. Carra, and S. Migliorini, "Cache-based multi-query optimization for data-intensive scalable computing frameworks," *arXiv preprint arXiv:1805.08650*, 2018. doi: [10.48550/arXiv.1805.08650](https://doi.org/10.48550/arXiv.1805.08650)
+[16] P. Michiardi, D. Carra, and S. Migliorini, "Cache-based multi-query optimization for data-intensive scalable computing frameworks," *Information Systems Frontiers*, vol. 23, pp. 35--51, 2021. doi: [10.1007/s10796-020-09995-2](https://doi.org/10.1007/s10796-020-09995-2)
 
-[17] M. Schonberger, I. Trummer, and W. Mauerer, "Large-scale multiple query optimisation with incremental quantum(-inspired) annealing," *Proceedings of the VLDB Endowment*, 2018.
+[17] M. Schönberger, I. Trummer, and W. Mauerer, "Large-scale multiple query optimisation with incremental quantum(-inspired) annealing," *Proceedings of the ACM on Management of Data*, vol. 3, no. 4, Article 253, pp. 253:1--253:25, 2025. doi: [10.1145/3749171](https://doi.org/10.1145/3749171)
 
 [18] H. Q. Ngo, C. Re, and A. Rudra, "Skew strikes back: New developments in the theory of join algorithms," *ACM SIGMOD Record*, vol. 42, no. 4, pp. 5--16, 2013. doi: [10.1145/2590989.2590991](https://doi.org/10.1145/2590989.2590991)
 

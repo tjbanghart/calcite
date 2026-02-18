@@ -5123,6 +5123,7 @@ public abstract class EnumerableDefaults {
     // moveNextSuffix stops backtracking when currentLevel falls below this.
     private int suffixPrefixDepth;
 
+
     WCOJEnumerator(
         List<Enumerable<Object[]>> inputs,
         List<int[]> joinKeyIndices,
@@ -5379,17 +5380,34 @@ public abstract class EnumerableDefaults {
         // Initialize on first call
         if (!initialized) {
           initialized = true;
-          // Initialize all levels
-          for (int level = 0; level < numVariables; level++) {
-            initCandidatesAtLevel(level);
-            if (!advanceAtLevel(level)) {
-              // No candidates at this level - finished
-              finished = true;
-              break;
+          // Initialize all levels, finding the first valid complete binding.
+          // If a level has no candidates, backtrack to find an alternative.
+          int initLevel = 0;
+          while (initLevel >= 0 && initLevel < numVariables) {
+            initCandidatesAtLevel(initLevel);
+            if (advanceAtLevel(initLevel)) {
+              // Successfully found a candidate at this level, move deeper
+              initLevel++;
+            } else {
+              // No candidates at this level; backtrack to try next
+              // candidate at a prior level
+              initLevel--;
+              while (initLevel >= 0) {
+                if (advanceAtLevel(initLevel)) {
+                  // Found next candidate at this level, go forward again
+                  initLevel++;
+                  break;
+                }
+                initLevel--;
+              }
             }
           }
-          if (!finished) {
-            // Collect matches for initial binding
+
+          if (initLevel < 0) {
+            // Exhausted all possibilities during initialization
+            finished = true;
+          } else {
+            // Successfully bound all variables
             currentLevel = numVariables;
             List<Object[][]> matches = collectMatches();
             if (!matches.isEmpty()) {
@@ -5482,16 +5500,29 @@ public abstract class EnumerableDefaults {
         candidateIndices[i] = -1;
       }
 
-      // Initialize suffix levels
-      for (int level = prefixDepth; level < numVariables; level++) {
-        initCandidatesAtLevel(level);
-        if (!advanceAtLevel(level)) {
-          finished = true;
-          break;
+      // Initialize suffix levels, with backtracking if needed
+      int initLevel = prefixDepth;
+      while (initLevel >= prefixDepth && initLevel < numVariables) {
+        initCandidatesAtLevel(initLevel);
+        if (advanceAtLevel(initLevel)) {
+          initLevel++;
+        } else {
+          // No candidates, backtrack within suffix
+          initLevel--;
+          while (initLevel >= prefixDepth) {
+            if (advanceAtLevel(initLevel)) {
+              initLevel++;
+              break;
+            }
+            initLevel--;
+          }
         }
       }
 
-      if (!finished) {
+      if (initLevel < prefixDepth) {
+        // No valid suffix binding for this prefix
+        finished = true;
+      } else {
         currentLevel = numVariables;
         // Pre-load first match set
         List<Object[][]> matches = collectMatches();

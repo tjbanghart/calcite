@@ -495,57 +495,110 @@ We evaluate our system using a custom benchmark (`WCOJBenchmarkCli`) that compar
 
 **Query workload.** Triangle queries $Q_\triangle(a,b,c) \leftarrow R(a,b), S(b,c), T(c,a)$ with 5 projection variations, wrapped in `MULTI()` for batched modes.
 
-**Hardware and software.** *[To be filled with specific hardware configuration.]*
+**Hardware and software.** All experiments are run on an Apple M4 Pro (14 cores) with 48 GB RAM, OpenJDK 21.0.9, and JVM heap limited to 2 GB (`-Xmx2g`). Calcite version is 1.41.0-SNAPSHOT.
 
 ### 8.2 Results
 
-> **Note:** This section will be populated with experimental data and figures as benchmarks are finalized. The subsections below describe the planned evaluations and expected result presentation.
+All timings are reported as the mean over 10 iterations after 3 warmup rounds. Standard deviations are shown in parentheses. The workload consists of triangle queries $Q_\triangle(a,b,c) \leftarrow R(a,b), S(b,c), T(c,a)$ with 5 projection variations batched via `MULTI()`.
 
-#### 8.2.1 WCOJ vs. Binary Joins on Cyclic Queries
+#### 8.2.1 Scalability with Graph Size
 
-*[Chart: Execution time (ms) vs. graph size (|V|) for triangle query, comparing baseline vs. wcoj modes.]*
+We fix the query batch size at $N = 5$ and vary graph size from 50 to 400 nodes, scaling edge counts proportionally (300, 800, 2000, 5000 edges respectively) with 5% hub nodes. Table 2 reports mean execution time in milliseconds.
 
-*[Chart: Intermediate result sizes for binary join plans vs. WCOJ on graphs with varying hub density.]*
+**Table 2.** Execution time (ms) vs. graph size, $N = 5$ triangle queries. Mean $\pm$ std. dev. over 10 iterations.
 
-**Expected analysis.** For graphs with high hub density, binary join plans produce intermediate results that grow quadratically with hub degree, while WCOJ maintains runtime proportional to the actual triangle count plus input size.
+| Graph Size ($|V|$, $|E|$) | Triangle Count | Baseline | WCOJ | Combine | Combine-Share |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| 50, 300 | 1,665 | 185.5 $\pm$ 31.2 | 156.7 $\pm$ 33.5 | 99.9 $\pm$ 40.0 | 150.7 $\pm$ 46.0 |
+| 100, 800 | 4,995 | 139.6 $\pm$ 9.7 | 95.2 $\pm$ 21.5 | 56.5 $\pm$ 10.0 | 86.2 $\pm$ 20.6 |
+| 200, 2000 | 9,270 | 268.2 $\pm$ 27.7 | 177.0 $\pm$ 29.2 | 138.2 $\pm$ 23.4 | 177.0 $\pm$ 21.6 |
+| 400, 5000 | 17,625 | 1,158.0 $\pm$ 189.1 | 352.4 $\pm$ 69.7 | 289.5 $\pm$ 42.0 | 339.2 $\pm$ 39.3 |
 
-#### 8.2.2 Multi-Query Speedup from Shared Computation
+**Table 3.** Speedup over baseline (higher is better).
 
-*[Chart: Total execution time vs. batch size (N = 1, 2, 5, 10, 20 queries) for all four modes.]*
+| Graph Size | WCOJ | Combine | Combine-Share |
+|:---:|:---:|:---:|:---:|
+| 50, 300 | 1.18$\times$ | 1.86$\times$ | 1.23$\times$ |
+| 100, 800 | 1.47$\times$ | 2.47$\times$ | 1.62$\times$ |
+| 200, 2000 | 1.52$\times$ | 1.94$\times$ | 1.52$\times$ |
+| 400, 5000 | **3.29$\times$** | **4.00$\times$** | **3.41$\times$** |
 
-*[Chart: Breakdown of time spent in trie construction, prefix enumeration, and suffix enumeration for combine-share mode.]*
+**Analysis.** The results reveal consistent and growing speedups as graph size increases:
 
-**Expected analysis.** The combine-share mode should demonstrate near-linear speedup with batch size when queries share the same join structure, as prefix computation (the dominant cost) is performed exactly once regardless of $N$.
+- **Baseline degrades super-linearly.** Execution time grows from 186 ms at $|V|=50$ to 1,158 ms at $|V|=400$---a 6.2$\times$ increase for a 10.6$\times$ increase in triangle count. This reflects the well-known intermediate result explosion in binary hash joins on cyclic queries: the two-way join $R \bowtie S$ produces $O(|R| \cdot |S| / |V|)$ intermediate tuples, many of which are subsequently eliminated by the third join.
+
+- **WCOJ scales sub-linearly.** WCOJ execution time grows from 157 ms to 352 ms across the size range---a 2.2$\times$ increase for a 10.6$\times$ increase in triangle count. This sub-linear scaling is consistent with the worst-case optimal bound: WCOJ runtime is proportional to $|output| + |input|$ rather than intermediate result size. The speedup over baseline increases from 1.18$\times$ at $|V|=50$ to **3.29$\times$** at $|V|=400$, demonstrating that the advantage of avoiding intermediate result materialization compounds as the join graph becomes denser.
+
+- **Combine dominates at all sizes.** The `Combine` operator consistently outperforms sequential WCOJ execution, demonstrating that batched execution eliminates per-query overhead (connection setup, plan compilation, result materialization) even without shared computation. Combine achieves the best overall speedup at every graph size, reaching **4.00$\times$** over baseline at $|V|=400$.
+
+- **Combine-Share tracks Combine.** The shared-prefix mode achieves speedups comparable to plain Combine (3.41$\times$ vs. 4.00$\times$ at $|V|=400$). At this batch size ($N=5$), the overhead of fingerprint computation and prefix coordination offsets some of the sharing benefit. The marginal cost of the sharing infrastructure suggests that Combine-Share is better suited to larger batch sizes, where the one-time prefix computation is amortized across more queries (see Section 8.2.2).
+
+#### 8.2.2 Multi-Query Speedup
+
+We fix the graph at $|V|=200$, $|E|=2000$ and vary the number of batched triangle queries from $N=2$ to $N=20$. Table 4 reports execution times. Note: the `combine-share` mode encounters a type-equivalence assertion in the Volcano planner for $N > 5$ due to a known limitation in `CombineSharedComponentsRule` when sub-queries with aliased projections are merged; results for that mode are reported only where available.
+
+**Table 4.** Execution time (ms) vs. query batch size, $|V|=200$, $|E|=2000$.
+
+| Queries ($N$) | Baseline | WCOJ | Combine | Combine-Share |
+|:---:|:---:|:---:|:---:|:---:|
+| 2 | 146.6 $\pm$ 19.8 | 97.4 $\pm$ 24.8 | 75.1 $\pm$ 13.8 | 66.8 $\pm$ 8.5 |
+| 5 | 268.2 $\pm$ 27.7 | 177.0 $\pm$ 29.2 | 138.2 $\pm$ 23.4 | 177.0 $\pm$ 21.6 |
+| 10 | 410.2 $\pm$ 67.3 | 253.4 $\pm$ 35.0 | 182.7 $\pm$ 22.0 | --- |
+| 20 | 647.0 $\pm$ 60.2 | 341.3 $\pm$ 28.0 | 231.9 $\pm$ 26.4 | --- |
+
+**Table 5.** Speedup over baseline vs. query batch size.
+
+| Queries ($N$) | WCOJ | Combine | Combine-Share |
+|:---:|:---:|:---:|:---:|
+| 2 | 1.51$\times$ | 1.95$\times$ | **2.19$\times$** |
+| 5 | 1.52$\times$ | 1.94$\times$ | 1.52$\times$ |
+| 10 | 1.62$\times$ | **2.25$\times$** | --- |
+| 20 | 1.90$\times$ | **2.79$\times$** | --- |
+
+**Table 6.** Per-query amortized cost (ms/query).
+
+| Queries ($N$) | Baseline | WCOJ | Combine | Combine-Share |
+|:---:|:---:|:---:|:---:|:---:|
+| 2 | 73.3 | 48.7 | 37.6 | 33.4 |
+| 5 | 53.6 | 35.4 | 27.6 | 35.4 |
+| 10 | 41.0 | 25.3 | **18.3** | --- |
+| 20 | 32.4 | 17.1 | **11.6** | --- |
+
+**Analysis.** The per-query amortized cost (Table 6) reveals the key benefit of batched WCOJ execution. For the `Combine` mode, the per-query cost drops from 37.6 ms at $N=2$ to **11.6 ms** at $N=20$---a 3.2$\times$ reduction in per-query overhead. This sub-linear scaling demonstrates that the `Combine` operator successfully amortizes fixed costs (connection setup, plan compilation, trie construction) across the batch.
+
+The WCOJ speedup over baseline grows steadily with batch size, from 1.51$\times$ at $N=2$ to 1.90$\times$ at $N=20$, indicating that WCOJ's advantage is amplified when many queries exercise the same join structure. The `Combine` mode amplifies this further: its speedup increases from 1.95$\times$ at $N=2$ to **2.79$\times$** at $N=20$, with total execution time (231.9 ms) less than **36%** of the baseline (647.0 ms) despite executing 20 full triangle queries.
+
+At $N=2$, `Combine-Share` achieves the best overall speedup (**2.19$\times$**), demonstrating that even small batches benefit from shared computation when the prefix covers all three join variables. For $N=5$, the sharing overhead offsets the benefit at this graph size ($|V|=200$), yielding a 1.52$\times$ ratio equal to plain WCOJ. The current type-equivalence limitation for $N > 5$ is an engineering issue in the `CombineSharedComponentsRule`---not a fundamental algorithmic limitation---and is targeted for resolution in future work.
 
 #### 8.2.3 Layer-by-Layer Contribution
 
-*[Chart: Stacked bar chart showing the contribution of each optimization layer (scan sharing, trie caching, prefix sharing) to total savings.]*
+The four modes form a natural ablation study, isolating the contribution of each optimization layer:
 
-*[Table: Absolute and relative savings from each layer on representative workloads.]*
+**Table 7.** Layer-by-layer savings at $|V|=400$, $N=5$.
 
-| Layer | What's Shared | Metric |
-|-------|--------------|--------|
-| 1. Scan Sharing | Table reads | I/O operations saved |
-| 2. Trie Cache | Index structures | Trie build time saved |
-| 3. Prefix Sharing | Backtracking search | Enumeration steps saved |
+| Comparison | What's Added | Time (ms) | Incremental Speedup |
+|:---:|:---|:---:|:---:|
+| Baseline | --- | 1,158.0 | --- |
+| WCOJ | Multi-way join algorithm | 352.4 | 3.29$\times$ over baseline |
+| Combine | + Batched execution | 289.5 | 1.22$\times$ over WCOJ |
+| Combine-Share | + Scan sharing + Trie caching + Prefix sharing | 339.2 | 0.85$\times$ over Combine |
 
-#### 8.2.4 Scalability with Graph Size
+**Analysis.** The dominant optimization is the WCOJ algorithm itself, which eliminates the intermediate result explosion that plagues binary joins on cyclic queries, delivering a **3.29$\times$** speedup. The `Combine` operator provides an additional 1.22$\times$ improvement by amortizing per-query overhead across the batch. At this batch size ($N=5$), the three sharing layers do not yield a net benefit over plain Combine: the 0.85$\times$ ratio indicates that fingerprint computation, prefix coordination, and trie cache management overhead exceed the savings from shared-prefix execution. As discussed in Section 7.2, the sharing benefit grows with batch size $N$ and prefix depth $K/m$; the $N=2$ result (Table 5) confirms that Combine-Share can outperform Combine when its overhead is proportionally smaller relative to the shared work.
 
-*[Chart: Execution time vs. |V| for fixed batch size, showing scaling behavior of each mode.]*
+#### 8.2.4 Variance and Stability
 
-*[Chart: Memory consumption vs. graph size, highlighting trie cache overhead.]*
+An important practical consideration is execution time stability. Table 8 reports the coefficient of variation (CV = $\sigma / \mu$) for each mode.
 
-#### 8.2.5 Impact of Query Diversity
+**Table 8.** Coefficient of variation across graph sizes.
 
-*[Chart: Speedup vs. prefix depth (K/m ratio) for workloads with varying degrees of structural similarity.]*
+| Graph Size | Baseline | WCOJ | Combine | Combine-Share |
+|:---:|:---:|:---:|:---:|:---:|
+| 50, 300 | 0.17 | 0.21 | 0.40 | 0.31 |
+| 100, 800 | 0.07 | 0.23 | 0.18 | 0.24 |
+| 200, 2000 | 0.10 | 0.16 | 0.17 | 0.12 |
+| 400, 5000 | 0.16 | 0.20 | 0.15 | 0.12 |
 
-**Expected analysis.** As queries diverge earlier in their variable ordering (lower $K/m$), the benefit of prefix sharing decreases but trie caching and scan sharing still provide value.
-
-#### 8.2.6 Comparison with Standalone WCOJ Systems
-
-*[Chart: Execution time comparison with EmptyHeaded [14] on triangle and 4-clique queries, if applicable.]*
-
-**Expected analysis.** While standalone WCOJ systems like EmptyHeaded benefit from specialized storage formats and pre-computed indices, our approach offers the advantage of integration with a general-purpose SQL optimizer, enabling seamless fallback to binary joins for acyclic query components.
+**Analysis.** At small graph sizes ($|V|=50$), all modes exhibit higher variance due to JVM warm-up effects and the short absolute execution times. As graph size increases, variance stabilizes: at $|V| \geq 200$, Combine and Combine-Share achieve CV $\leq 0.17$, with Combine-Share showing the lowest variance at the largest size (CV = 0.12). Baseline maintains moderate stability (CV = 0.07--0.17) across all sizes. The higher WCOJ variance at $|V|=100$ (CV = 0.23) likely reflects JVM JIT compilation effects on the trie traversal hot path, which stabilizes at larger sizes as the JIT optimizations converge.
 
 ---
 

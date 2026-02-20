@@ -40,13 +40,31 @@ public final class CommonRelExpressionRegistry {
    */
   private final Map<RelDigest, RelNode> rels = new HashMap<>();
 
+  /** Tracks how many times each digest has been registered. */
+  private final Map<RelDigest, Integer> counts = new HashMap<>();
+
   /**
    * Adds the specified expression to this registry.
    *
    * @param rel a relational expression to be added to the registry.
    */
   public void add(RelNode rel) {
-    this.rels.put(rel.getRelDigest(), rel);
+    RelDigest digest = rel.getRelDigest();
+    this.rels.put(digest, rel);
+    this.counts.merge(digest, 1, Integer::sum);
+  }
+
+  /**
+   * Returns a stream with all expression entries that appear at least
+   * {@code minCount} times.
+   *
+   * @param minCount minimum number of occurrences required
+   * @return a stream with matching expression entries
+   */
+  public Stream<RelNode> entriesWithMinCount(int minCount) {
+    return rels.entrySet().stream()
+        .filter(e -> counts.getOrDefault(e.getKey(), 0) >= minCount)
+        .map(e -> RelOptUtil.stripAll(e.getValue()));
   }
 
   /**

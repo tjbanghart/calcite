@@ -28,6 +28,7 @@ import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.Combine;
 import org.apache.calcite.rel.core.RelFactories;
 import org.apache.calcite.rel.core.Spool;
+import org.apache.calcite.rel.core.TableScan;
 import org.apache.calcite.rel.logical.LogicalTableScan;
 import org.apache.calcite.rel.logical.LogicalTableSpool;
 
@@ -59,25 +60,26 @@ public class CombineSharedComponentsRule extends RelRule<CombineSharedComponents
   @Override public void onMatch(RelOptRuleCall call) {
     RelNode combine = RelOptUtil.stripAll(call.rel(0));
 
-    // Use the suggester to find shared components
+    // Use the suggester to find shared components that appear at least twice
     RelCommonExpressionBasicSuggester suggester = new RelCommonExpressionBasicSuggester();
-    Collection<RelNode> sharedComponents = suggester.suggest(combine, null);
+    Collection<RelNode> sharedComponents = suggester.suggestShared(combine, null);
 
-    // Filter out any components that are already spools or scans from spool tables
-    // to avoid creating spools of spools (which causes infinite loops)
+    // Filter out components that should not be spooled
     sharedComponents = sharedComponents.stream()
         .filter(node -> {
+          // Skip the Combine root itself — spooling it is nonsensical
+          if (node instanceof Combine) {
+            return false;
+          }
           // Skip if the node itself is a Spool
           if (node instanceof Spool) {
             return false;
           }
-          // Skip if it's a TableScan reading from a spool table
-          if (node instanceof LogicalTableScan) {
-            LogicalTableScan scan = (LogicalTableScan) node;
-            // Check if the underlying table is a SpoolRelOptTable
-            if (scan.getTable() instanceof SpoolRelOptTable) {
-              return false;
-            }
+          // Skip leaf table scans — spooling raw scans bypasses the
+          // POJO-to-Object[] conversion pipeline. The TrieCache already
+          // handles scan-level sharing for WCOJ operators.
+          if (node instanceof TableScan) {
+            return false;
           }
           return true;
         })

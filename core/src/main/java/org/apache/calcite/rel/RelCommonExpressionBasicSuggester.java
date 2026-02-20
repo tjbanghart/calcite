@@ -38,6 +38,21 @@ import java.util.stream.Collectors;
 public class RelCommonExpressionBasicSuggester implements RelCommonExpressionSuggester {
 
   @Override public Collection<RelNode> suggest(RelNode input, @Nullable Context context) {
+    CommonRelExpressionRegistry localRegistry = buildRegistry(input);
+    return localRegistry.entries().collect(Collectors.toList());
+  }
+
+  /**
+   * Returns only expressions that appear at least twice in the plan.
+   * This is the appropriate method for sharing rules that want to avoid
+   * creating spools for unique sub-expressions.
+   */
+  public Collection<RelNode> suggestShared(RelNode input, @Nullable Context context) {
+    CommonRelExpressionRegistry localRegistry = buildRegistry(input);
+    return localRegistry.entriesWithMinCount(2).collect(Collectors.toList());
+  }
+
+  private CommonRelExpressionRegistry buildRegistry(RelNode input) {
     CommonRelExpressionRegistry localRegistry = new CommonRelExpressionRegistry();
     HepProgram ruleProgram = new HepProgramBuilder()
         .addRuleInstance(CommonRelSubExprRegisterRule.Config.COMBINE.toRule())
@@ -50,7 +65,7 @@ public class RelCommonExpressionBasicSuggester implements RelCommonExpressionSug
     HepPlanner planner = new HepPlanner(ruleProgram, Contexts.of(localRegistry));
     planner.setRoot(input);
     planner.findBestExp();
-    return localRegistry.entries().collect(Collectors.toList());
+    return localRegistry;
   }
 
 }

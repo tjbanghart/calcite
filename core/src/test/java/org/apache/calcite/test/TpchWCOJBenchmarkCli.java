@@ -17,76 +17,70 @@
 package org.apache.calcite.test;
 
 import org.apache.calcite.adapter.enumerable.EnumerableRules;
-import org.apache.calcite.jdbc.CalciteConnection;
 import org.apache.calcite.plan.RelOptPlanner;
 import org.apache.calcite.rel.rules.CoreRules;
 import org.apache.calcite.runtime.Hook;
-import org.apache.calcite.schema.SchemaPlus;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
-import java.util.Random;
-import java.util.Set;
 import java.util.function.Consumer;
 
 /**
  * Command-line benchmark comparing baseline binary joins vs WCOJ
- * on cyclic queries over a dense graph dataset.
+ * on cyclic queries over TPC-H data.
  *
- * <p>Supports three query shapes:
+ * <p>While standard TPC-H queries are acyclic, the schema naturally
+ * supports cyclic join patterns — particularly lineitem self-joins
+ * where the same table is joined on different keys:
  * <ul>
- *   <li><b>triangle</b>: 3-cycle a→b→c→a (3 tables, 3 variables)</li>
- *   <li><b>rectangle</b>: 4-cycle a→b→c→d→a (4 tables, 4 variables)</li>
- *   <li><b>diamond</b>: two triangles sharing edge a→b (5 tables, 4 variables)</li>
+ *   <li><b>triangle</b>: lineitem self-join triangle
+ *       (orderkey-suppkey-partkey cycle, 587K rows at SF=0.01)</li>
+ *   <li><b>rectangle</b>: lineitem self-join 4-cycle
+ *       (suppkey-orderkey-partkey-orderkey, 1.2M rows at SF=0.01)</li>
+ *   <li><b>fk-triangle</b>: lineitem-partsupp-supplier foreign-key triangle
+ *       (partkey-suppkey cycle, 301K rows at SF=0.01)</li>
  * </ul>
  *
  * <p>Requires {@code -Dcalcite.enable.wcoj=true} JVM argument.
  *
  * <p>Usage:
  * <pre>
- *   ./run-wcoj-benchmark.sh [options]
+ *   ./gradlew :core:runTpchWcojBenchmark -PtpchWcojBenchmarkArgs="[options]"
  *
  * Options:
- *   --nodes=N        Number of graph vertices (default: 200)
- *   --edges=N        Number of directed edges (default: 1000)
- *   --queries=N      Query variations for multi modes (default: 5)
- *   --warmup=N       Warmup iterations (default: 3)
- *   --iterations=N   Measurement iterations (default: 10)
- *   --mode=MODE      Only run: baseline|wcoj|combine|combine-share
+ *   --scale=N        TPC-H scale factor (default: 0.01)
  *   --shape=SHAPE    Query shape: triangle|rectangle|diamond|all (default: all)
- *   --seed=N         Random seed for graph generation (default: 42)
+ *   --queries=N      Query variations for multi modes (default: 5)
+ *   --warmup=N       Warmup iterations (default: 10)
+ *   --iterations=N   Measurement iterations (default: 10)
+ *   --mode=MODE      Only run: baseline|wcoj|combine-binary|combine|combine-share
  *   --csv            Output in CSV format
  *   --verbose        Show per-iteration details
  * </pre>
  */
-public class WCOJBenchmarkCli {
+public class TpchWCOJBenchmarkCli {
 
   // Configuration
-  private int numNodes = 200;
-  private int numEdges = 1000;
-  private int queryCount = 5;
-  private int warmupIterations = 3;
-  private int measureIterations = 10;
-  private String modeFilter = null; // null = run all
+  private double scale = 0.01;
   private String shapeFilter = "all";
-  private long seed = 42;
+  private int queryCount = 5;
+  private int warmupIterations = 10;
+  private int measureIterations = 10;
+  private String modeFilter = null;
   private boolean csvOutput = false;
   private boolean verbose = true;
 
-  private static final String[] ALL_SHAPES = {"triangle", "rectangle", "diamond"};
+  private static final String[] ALL_SHAPES = {"triangle", "rectangle", "fk-triangle"};
 
   public static void main(String[] args) throws Exception {
-    // Verify WCOJ is enabled (set via -Dcalcite.enable.wcoj=true JVM arg)
     boolean wcojEnabled =
         org.apache.calcite.config.CalciteSystemProperty.ENABLE_WCOJ.value();
     if (!wcojEnabled) {
@@ -96,17 +90,17 @@ public class WCOJBenchmarkCli {
 
     DriverManager.registerDriver(new org.apache.calcite.jdbc.Driver());
 
-    WCOJBenchmarkCli cli = new WCOJBenchmarkCli();
+    TpchWCOJBenchmarkCli cli = new TpchWCOJBenchmarkCli();
     cli.parseArgs(args);
     cli.run();
   }
 
   private void parseArgs(String[] args) {
     for (String arg : args) {
-      if (arg.startsWith("--nodes=")) {
-        numNodes = Integer.parseInt(arg.substring("--nodes=".length()));
-      } else if (arg.startsWith("--edges=")) {
-        numEdges = Integer.parseInt(arg.substring("--edges=".length()));
+      if (arg.startsWith("--scale=")) {
+        scale = Double.parseDouble(arg.substring("--scale=".length()));
+      } else if (arg.startsWith("--shape=")) {
+        shapeFilter = arg.substring("--shape=".length());
       } else if (arg.startsWith("--queries=")) {
         queryCount = Integer.parseInt(arg.substring("--queries=".length()));
       } else if (arg.startsWith("--warmup=")) {
@@ -115,10 +109,6 @@ public class WCOJBenchmarkCli {
         measureIterations = Integer.parseInt(arg.substring("--iterations=".length()));
       } else if (arg.startsWith("--mode=")) {
         modeFilter = arg.substring("--mode=".length());
-      } else if (arg.startsWith("--shape=")) {
-        shapeFilter = arg.substring("--shape=".length());
-      } else if (arg.startsWith("--seed=")) {
-        seed = Long.parseLong(arg.substring("--seed=".length()));
       } else if (arg.equals("--csv")) {
         csvOutput = true;
         verbose = false;
@@ -132,282 +122,135 @@ public class WCOJBenchmarkCli {
   }
 
   private void printUsage() {
-    System.out.println("WCOJ Benchmark — Baseline vs WCOJ vs Multi-Query WCOJ");
-    System.out.println();
-    System.out.println("Usage: ./run-wcoj-benchmark.sh [options]");
+    System.out.println("TPC-H WCOJ Benchmark — Cyclic Joins on Realistic Data");
     System.out.println();
     System.out.println("Options:");
-    System.out.println("  --nodes=N        Number of graph vertices (default: 200)");
-    System.out.println("  --edges=N        Number of directed edges (default: 1000)");
+    System.out.println("  --scale=N        TPC-H scale factor (default: 0.01)");
+    System.out.println("  --shape=SHAPE    Query shape: triangle|rectangle|fk-triangle|all (default: all)");
     System.out.println("  --queries=N      Query variations for multi modes (default: 5)");
-    System.out.println("  --warmup=N       Warmup iterations (default: 3)");
+    System.out.println("  --warmup=N       Warmup iterations (default: 10)");
     System.out.println("  --iterations=N   Measurement iterations (default: 10)");
-    System.out.println("  --mode=MODE      Only run: baseline|wcoj|combine|combine-share");
-    System.out.println("  --shape=SHAPE    Query shape: triangle|rectangle|diamond|all (default: all)");
-    System.out.println("  --seed=N         Random seed for graph generation (default: 42)");
+    System.out.println("  --mode=MODE      Only run: baseline|wcoj|combine-binary|combine|combine-share");
     System.out.println("  --csv            Output results in CSV format");
     System.out.println("  --verbose        Show per-iteration timing details");
     System.out.println("  --help, -h       Show this help message");
   }
 
   // ---------------------------------------------------------------
-  // Graph schema — directed edges with weight
+  // Query definitions — cyclic joins on TPC-H tables
   // ---------------------------------------------------------------
 
-  /** A directed edge with src, dst, and weight. */
-  public static class GraphEdge {
-    public final int src;
-    public final int dst;
-    public final double weight;
-
-    public GraphEdge(int src, int dst, double weight) {
-      this.src = src;
-      this.dst = dst;
-      this.weight = weight;
-    }
-  }
-
-  /** Schema with six edge tables for cyclic query shapes.
-   *  All point to the same edge data (self-join over one graph).
-   *  Triangle uses edges1-3, rectangle uses edges1-4, diamond uses edges1-5. */
-  public static class GraphSchema {
-    public final GraphEdge[] edges1;
-    public final GraphEdge[] edges2;
-    public final GraphEdge[] edges3;
-    public final GraphEdge[] edges4;
-    public final GraphEdge[] edges5;
-    public final GraphEdge[] edges6;
-
-    GraphSchema(GraphEdge[] edges) {
-      this.edges1 = edges;
-      this.edges2 = edges;
-      this.edges3 = edges;
-      this.edges4 = edges;
-      this.edges5 = edges;
-      this.edges6 = edges;
-    }
-  }
-
-  /**
-   * Generate a "dense hub" graph designed to stress binary joins.
-   *
-   * <p>Creates hub nodes that connect to many spokes. Binary join
-   * R(a,b) JOIN S(b,c) on b=hub produces O(fanIn * fanOut) intermediate
-   * rows per hub, but only a fraction close the cycle.
-   */
-  private GraphEdge[] generateDenseHubGraph(int nodes, int targetEdges, long graphSeed) {
-    Random rng = new Random(graphSeed);
-    Set<Long> seen = new HashSet<>();
-    List<GraphEdge> edgeList = new ArrayList<>();
-
-    // Pick ~5% of nodes as hubs
-    int numHubs = Math.max(2, nodes / 20);
-    int[] hubs = new int[numHubs];
-    for (int i = 0; i < numHubs; i++) {
-      hubs[i] = i; // First few nodes are hubs
-    }
-
-    // Each hub gets many incoming and outgoing edges
-    int edgesPerHub = targetEdges / (numHubs * 2);
-    for (int hub : hubs) {
-      for (int j = 0; j < edgesPerHub; j++) {
-        int spoke = numHubs + rng.nextInt(nodes - numHubs);
-        // hub → spoke
-        long key1 = (long) hub * nodes + spoke;
-        if (seen.add(key1)) {
-          edgeList.add(new GraphEdge(hub, spoke, rng.nextDouble() * 100.0));
-        }
-        // spoke → hub
-        long key2 = (long) spoke * nodes + hub;
-        if (seen.add(key2)) {
-          edgeList.add(new GraphEdge(spoke, hub, rng.nextDouble() * 100.0));
-        }
-      }
-    }
-
-    // Add some spoke-to-spoke edges to create cycles
-    int spokeEdges = targetEdges - edgeList.size();
-    for (int j = 0; j < spokeEdges && j < nodes * 2; j++) {
-      int a = numHubs + rng.nextInt(nodes - numHubs);
-      int b = numHubs + rng.nextInt(nodes - numHubs);
-      if (a != b) {
-        long key = (long) a * nodes + b;
-        if (seen.add(key)) {
-          edgeList.add(new GraphEdge(a, b, rng.nextDouble() * 100.0));
-        }
-      }
-    }
-
-    return edgeList.toArray(new GraphEdge[0]);
-  }
-
-  private void printGraphStats(List<GraphEdge> edgeList, String shape) {
-    if (csvOutput) {
-      return;
-    }
-    int numHubs = Math.max(2, numNodes / 20);
-    System.out.printf("  Graph:        %d edges, %d hubs%n", edgeList.size(), numHubs);
-    if (numNodes <= 500) {
-      switch (shape) {
-      case "triangle":
-        System.out.printf("  Triangles:    ~%d%n", countTriangles(edgeList));
-        break;
-      case "rectangle":
-        System.out.printf("  Rectangles:   ~%d%n", countRectangles(edgeList));
-        break;
-      case "diamond":
-        System.out.printf("  Diamonds:     ~%d%n", countDiamonds(edgeList));
-        break;
-      default:
-        break;
-      }
-    }
-    long intermediateEst = estimateIntermediateSize(edgeList, numNodes);
-    System.out.printf("  Binary join intermediate est: ~%,d rows%n", intermediateEst);
-  }
-
-  /** Count actual triangles in the edge list: a→b→c→a. */
-  private int countTriangles(List<GraphEdge> edges) {
-    Set<Long> edgeSet = new HashSet<>();
-    int maxNode = 0;
-    for (GraphEdge e : edges) {
-      edgeSet.add((long) e.src * 100000 + e.dst);
-      maxNode = Math.max(maxNode, Math.max(e.src, e.dst));
-    }
-    @SuppressWarnings("unchecked")
-    List<Integer>[] adj = new List[maxNode + 1];
-    for (int i = 0; i <= maxNode; i++) {
-      adj[i] = new ArrayList<>();
-    }
-    for (GraphEdge e : edges) {
-      adj[e.src].add(e.dst);
-    }
-    int count = 0;
-    for (GraphEdge e : edges) {
-      int a = e.src;
-      int b = e.dst;
-      for (int c : adj[b]) {
-        if (edgeSet.contains((long) c * 100000 + a)) {
-          count++;
-        }
-      }
-    }
-    return count;
-  }
-
-  /** Count 4-cycles (rectangles): a→b→c→d→a. */
-  private int countRectangles(List<GraphEdge> edges) {
-    Set<Long> edgeSet = new HashSet<>();
-    int maxNode = 0;
-    for (GraphEdge e : edges) {
-      edgeSet.add((long) e.src * 100000 + e.dst);
-      maxNode = Math.max(maxNode, Math.max(e.src, e.dst));
-    }
-    @SuppressWarnings("unchecked")
-    List<Integer>[] adj = new List[maxNode + 1];
-    for (int i = 0; i <= maxNode; i++) {
-      adj[i] = new ArrayList<>();
-    }
-    for (GraphEdge e : edges) {
-      adj[e.src].add(e.dst);
-    }
-    long count = 0;
-    for (GraphEdge e : edges) {
-      int a = e.src;
-      int b = e.dst;
-      for (int c : adj[b]) {
-        if (c == a) {
-          continue;
-        }
-        for (int d : adj[c]) {
-          if (d != a && d != b && edgeSet.contains((long) d * 100000 + a)) {
-            count++;
-          }
-        }
-      }
-    }
-    return (int) Math.min(count, Integer.MAX_VALUE);
-  }
-
-  /** Count diamonds: two triangles sharing edge a→b.
-   *  Pattern: a→b, b→c, c→a, b→d, d→a (c≠d). */
-  private int countDiamonds(List<GraphEdge> edges) {
-    Set<Long> edgeSet = new HashSet<>();
-    int maxNode = 0;
-    for (GraphEdge e : edges) {
-      edgeSet.add((long) e.src * 100000 + e.dst);
-      maxNode = Math.max(maxNode, Math.max(e.src, e.dst));
-    }
-    @SuppressWarnings("unchecked")
-    List<Integer>[] adj = new List[maxNode + 1];
-    for (int i = 0; i <= maxNode; i++) {
-      adj[i] = new ArrayList<>();
-    }
-    for (GraphEdge e : edges) {
-      adj[e.src].add(e.dst);
-    }
-    long count = 0;
-    // For each edge a→b, count pairs (c,d) where b→c, c→a, b→d, d→a, c≠d
-    for (GraphEdge e : edges) {
-      int a = e.src;
-      int b = e.dst;
-      // Find all nodes reachable from b that close back to a
-      List<Integer> closers = new ArrayList<>();
-      for (int x : adj[b]) {
-        if (x != a && x != b && edgeSet.contains((long) x * 100000 + a)) {
-          closers.add(x);
-        }
-      }
-      // Each pair (c, d) from closers with c≠d is one diamond
-      count += (long) closers.size() * (closers.size() - 1);
-    }
-    return (int) Math.min(count, Integer.MAX_VALUE);
-  }
-
-  /** Estimate intermediate result size of R(a,b) JOIN S(b,c) on b. */
-  private long estimateIntermediateSize(List<GraphEdge> edges, int nodes) {
-    int[] inDeg = new int[nodes];
-    int[] outDeg = new int[nodes];
-    for (GraphEdge e : edges) {
-      if (e.dst < nodes) {
-        inDeg[e.dst]++;
-      }
-      if (e.src < nodes) {
-        outDeg[e.src]++;
-      }
-    }
-    long total = 0;
-    for (int b = 0; b < nodes; b++) {
-      total += (long) inDeg[b] * outDeg[b];
-    }
-    return total;
-  }
-
-  // ---------------------------------------------------------------
-  // Query generation
-  // ---------------------------------------------------------------
-
-  // --- Triangle: a→b→c→a (3 tables) ---
+  // --- Triangle: lineitem self-join (orderkey-suppkey-partkey cycle) ---
+  // l1-l2 share orderkey (items in same order)
+  // l2-l3 share suppkey (items from same supplier)
+  // l3-l1 share partkey (items for same part) → closes cycle
+  // Binary join l1⋈l2 on orderkey produces ~4x fan-out per row,
+  // then ⋈l3 on suppkey produces ~600x — massive intermediate explosion.
   private static final String TRIANGLE_FROM =
-      "s.edges1 e1, s.edges2 e2, s.edges3 e3";
+      "lineitem l1, lineitem l2, lineitem l3";
   private static final String TRIANGLE_WHERE =
-      "e1.dst = e2.src AND e2.dst = e3.src AND e3.dst = e1.src";
+      "l1.l_orderkey = l2.l_orderkey"
+          + " AND l2.l_suppkey = l3.l_suppkey"
+          + " AND l3.l_partkey = l1.l_partkey";
 
-  // --- Rectangle (4-cycle): a→b→c→d→a (4 tables) ---
+  // --- Rectangle: lineitem self-join 4-cycle (supp-order-part-order) ---
+  // l1-l2 share suppkey, l2-l3 share orderkey,
+  // l3-l4 share partkey, l4-l1 share orderkey → closes 4-cycle
   private static final String RECTANGLE_FROM =
-      "s.edges1 e1, s.edges2 e2, s.edges3 e3, s.edges4 e4";
+      "lineitem l1, lineitem l2, lineitem l3, lineitem l4";
   private static final String RECTANGLE_WHERE =
-      "e1.dst = e2.src AND e2.dst = e3.src AND e3.dst = e4.src AND e4.dst = e1.src";
+      "l1.l_suppkey = l2.l_suppkey"
+          + " AND l2.l_orderkey = l3.l_orderkey"
+          + " AND l3.l_partkey = l4.l_partkey"
+          + " AND l4.l_orderkey = l1.l_orderkey";
 
-  // --- Diamond: two triangles sharing edge a→b (5 tables) ---
-  // e1: a→b, e2: b→c, e3: c→a, e4: b→d, e5: d→a
-  private static final String DIAMOND_FROM =
-      "s.edges1 e1, s.edges2 e2, s.edges3 e3, s.edges4 e4, s.edges5 e5";
-  private static final String DIAMOND_WHERE =
-      "e1.dst = e2.src AND e2.dst = e3.src AND e3.dst = e1.src"
-          + " AND e1.dst = e4.src AND e4.dst = e5.src AND e5.dst = e1.src";
+  // --- FK-Triangle: lineitem-partsupp-supplier (foreign key triangle) ---
+  // l-ps on partkey, ps-s on suppkey, l-s on suppkey → closes cycle
+  // More selective than self-joins; tests FK-based cyclicity
+  private static final String FK_TRIANGLE_FROM =
+      "lineitem l, partsupp ps, supplier s";
+  private static final String FK_TRIANGLE_WHERE =
+      "l.l_partkey = ps.ps_partkey"
+          + " AND ps.ps_suppkey = s.s_suppkey"
+          + " AND l.l_suppkey = s.s_suppkey";
 
-  /** Generate query variations for the given shape. */
+  // ---------------------------------------------------------------
+  // Query variations (5 per shape, different projections)
+  // ---------------------------------------------------------------
+
+  private String triangleVariation(int index) {
+    switch (index % 5) {
+    case 0:
+      return "SELECT l1.l_orderkey, l2.l_suppkey, l3.l_partkey "
+          + "FROM " + TRIANGLE_FROM + " WHERE " + TRIANGLE_WHERE;
+    case 1:
+      return "SELECT l1.l_extendedprice, l2.l_quantity, l3.l_discount "
+          + "FROM " + TRIANGLE_FROM + " WHERE " + TRIANGLE_WHERE;
+    case 2:
+      return "SELECT l1.l_orderkey, l1.l_partkey, l2.l_suppkey, l3.l_shipdate "
+          + "FROM " + TRIANGLE_FROM + " WHERE " + TRIANGLE_WHERE;
+    case 3:
+      return "SELECT l2.l_orderkey, l2.l_suppkey, l3.l_partkey, l1.l_returnflag "
+          + "FROM " + TRIANGLE_FROM + " WHERE " + TRIANGLE_WHERE;
+    default:
+      return "SELECT l3.l_partkey, l1.l_quantity, l2.l_extendedprice, l3.l_tax "
+          + "FROM " + TRIANGLE_FROM + " WHERE " + TRIANGLE_WHERE;
+    }
+  }
+
+  private String rectangleVariation(int index) {
+    switch (index % 5) {
+    case 0:
+      return "SELECT l1.l_orderkey, l2.l_suppkey, l3.l_partkey, l4.l_orderkey AS ok4 "
+          + "FROM " + RECTANGLE_FROM + " WHERE " + RECTANGLE_WHERE;
+    case 1:
+      return "SELECT l1.l_extendedprice, l2.l_quantity, l3.l_discount, l4.l_tax "
+          + "FROM " + RECTANGLE_FROM + " WHERE " + RECTANGLE_WHERE;
+    case 2:
+      return "SELECT l1.l_orderkey, l2.l_orderkey AS ok2, l3.l_partkey, l4.l_suppkey "
+          + "FROM " + RECTANGLE_FROM + " WHERE " + RECTANGLE_WHERE;
+    case 3:
+      return "SELECT l1.l_suppkey, l2.l_suppkey AS sk2, l3.l_orderkey AS ok3, l4.l_shipdate "
+          + "FROM " + RECTANGLE_FROM + " WHERE " + RECTANGLE_WHERE;
+    default:
+      return "SELECT l4.l_orderkey AS ok4, l1.l_quantity, l2.l_returnflag, l3.l_extendedprice "
+          + "FROM " + RECTANGLE_FROM + " WHERE " + RECTANGLE_WHERE;
+    }
+  }
+
+  private String fkTriangleVariation(int index) {
+    switch (index % 5) {
+    case 0:
+      return "SELECT l.l_orderkey, l.l_partkey, l.l_suppkey, ps.ps_availqty, s.s_name "
+          + "FROM " + FK_TRIANGLE_FROM + " WHERE " + FK_TRIANGLE_WHERE;
+    case 1:
+      return "SELECT l.l_extendedprice, l.l_discount, ps.ps_supplycost, s.s_acctbal "
+          + "FROM " + FK_TRIANGLE_FROM + " WHERE " + FK_TRIANGLE_WHERE;
+    case 2:
+      return "SELECT l.l_quantity, l.l_partkey, s.s_name, s.s_nationkey "
+          + "FROM " + FK_TRIANGLE_FROM + " WHERE " + FK_TRIANGLE_WHERE;
+    case 3:
+      return "SELECT l.l_orderkey, ps.ps_partkey, ps.ps_suppkey, ps.ps_availqty, s.s_suppkey "
+          + "FROM " + FK_TRIANGLE_FROM + " WHERE " + FK_TRIANGLE_WHERE;
+    default:
+      return "SELECT s.s_name, s.s_nationkey, l.l_shipdate, ps.ps_comment "
+          + "FROM " + FK_TRIANGLE_FROM + " WHERE " + FK_TRIANGLE_WHERE;
+    }
+  }
+
+  private String queryVariation(String shape, int index) {
+    switch (shape) {
+    case "triangle":
+      return triangleVariation(index);
+    case "rectangle":
+      return rectangleVariation(index);
+    case "fk-triangle":
+      return fkTriangleVariation(index);
+    default:
+      throw new IllegalArgumentException("Unknown shape: " + shape);
+    }
+  }
+
   private List<String> generateQueries(String shape, int n) {
     List<String> queries = new ArrayList<>();
     for (int i = 0; i < n; i++) {
@@ -416,7 +259,6 @@ public class WCOJBenchmarkCli {
     return queries;
   }
 
-  /** Generate a MULTI() query wrapping N variations of the given shape. */
   private String generateMultiQuery(String shape, int n) {
     StringBuilder sb = new StringBuilder();
     sb.append("MULTI(\n");
@@ -430,96 +272,8 @@ public class WCOJBenchmarkCli {
     return sb.toString();
   }
 
-  /** Dispatch to shape-specific query variation. */
-  private String queryVariation(String shape, int index) {
-    switch (shape) {
-    case "triangle":
-      return triangleVariation(index);
-    case "rectangle":
-      return rectangleVariation(index);
-    case "diamond":
-      return diamondVariation(index);
-    default:
-      throw new IllegalArgumentException("Unknown shape: " + shape);
-    }
-  }
-
-  /** Triangle query variations with different projections. */
-  private String triangleVariation(int index) {
-    switch (index % 5) {
-    case 0:
-      return "SELECT e1.src AS a, e1.dst AS b, e2.dst AS c "
-          + "FROM " + TRIANGLE_FROM + " WHERE " + TRIANGLE_WHERE;
-    case 1:
-      return "SELECT e1.src AS s1, e2.src AS s2, e3.src AS s3 "
-          + "FROM " + TRIANGLE_FROM + " WHERE " + TRIANGLE_WHERE;
-    case 2:
-      return "SELECT e1.src AS a, e2.dst AS c, e3.weight AS w "
-          + "FROM " + TRIANGLE_FROM + " WHERE " + TRIANGLE_WHERE;
-    case 3:
-      return "SELECT e1.src AS a, e1.dst AS b, e2.dst AS c, e3.weight AS w "
-          + "FROM " + TRIANGLE_FROM + " WHERE " + TRIANGLE_WHERE;
-    default:
-      return "SELECT e3.dst AS x, e1.src AS y, e2.src AS z, e1.weight AS w "
-          + "FROM " + TRIANGLE_FROM + " WHERE " + TRIANGLE_WHERE;
-    }
-  }
-
-  /** Rectangle (4-cycle) query variations with different projections. */
-  private String rectangleVariation(int index) {
-    switch (index % 5) {
-    case 0:
-      // All 4 cycle vertices
-      return "SELECT e1.src AS a, e1.dst AS b, e2.dst AS c, e3.dst AS d "
-          + "FROM " + RECTANGLE_FROM + " WHERE " + RECTANGLE_WHERE;
-    case 1:
-      // Source columns from each table
-      return "SELECT e1.src AS s1, e2.src AS s2, e3.src AS s3, e4.src AS s4 "
-          + "FROM " + RECTANGLE_FROM + " WHERE " + RECTANGLE_WHERE;
-    case 2:
-      // Partial projection with weight
-      return "SELECT e1.src AS a, e2.dst AS c, e4.weight AS w "
-          + "FROM " + RECTANGLE_FROM + " WHERE " + RECTANGLE_WHERE;
-    case 3:
-      // Full with weight
-      return "SELECT e1.src AS a, e1.dst AS b, e2.dst AS c, e3.dst AS d, e4.weight AS w "
-          + "FROM " + RECTANGLE_FROM + " WHERE " + RECTANGLE_WHERE;
-    default:
-      // Reversed perspective
-      return "SELECT e4.dst AS x, e1.src AS y, e2.src AS z, e3.src AS q, e1.weight AS w "
-          + "FROM " + RECTANGLE_FROM + " WHERE " + RECTANGLE_WHERE;
-    }
-  }
-
-  /** Diamond query variations with different projections. */
-  private String diamondVariation(int index) {
-    switch (index % 5) {
-    case 0:
-      // All 4 variables: a, b, c, d
-      return "SELECT e1.src AS a, e1.dst AS b, e2.dst AS c, e4.dst AS d "
-          + "FROM " + DIAMOND_FROM + " WHERE " + DIAMOND_WHERE;
-    case 1:
-      // Source columns
-      return "SELECT e1.src AS s1, e2.src AS s2, e3.src AS s3, e4.src AS s4, e5.src AS s5 "
-          + "FROM " + DIAMOND_FROM + " WHERE " + DIAMOND_WHERE;
-    case 2:
-      // Partial with weight
-      return "SELECT e1.src AS a, e2.dst AS c, e4.dst AS d, e3.weight AS w "
-          + "FROM " + DIAMOND_FROM + " WHERE " + DIAMOND_WHERE;
-    case 3:
-      // Full with weights from both closing edges
-      return "SELECT e1.src AS a, e1.dst AS b, e2.dst AS c, e4.dst AS d, "
-          + "e3.weight AS w1, e5.weight AS w2 "
-          + "FROM " + DIAMOND_FROM + " WHERE " + DIAMOND_WHERE;
-    default:
-      // Reversed perspective
-      return "SELECT e3.dst AS x, e1.src AS y, e2.src AS z, e4.src AS q, e1.weight AS w "
-          + "FROM " + DIAMOND_FROM + " WHERE " + DIAMOND_WHERE;
-    }
-  }
-
   // ---------------------------------------------------------------
-  // Execution modes
+  // Execution modes (same pattern as WCOJBenchmarkCli)
   // ---------------------------------------------------------------
 
   private boolean shouldRun(String mode) {
@@ -596,6 +350,21 @@ public class WCOJBenchmarkCli {
     return new TimingResult(endNs - startNs, rowCount);
   }
 
+  /** Combine-binary: MULTI() with standard binary hash joins (no WCOJ). */
+  private TimingResult executeCombineBinary(Connection conn, String multiQuery) throws Exception {
+    // No planner hook — uses default binary join rules
+    int rowCount = 0;
+    long startNs = System.nanoTime();
+    try (Statement stmt = conn.createStatement();
+         ResultSet rs = stmt.executeQuery(multiQuery)) {
+      while (rs.next()) {
+        rowCount++;
+      }
+    }
+    long endNs = System.nanoTime();
+    return new TimingResult(endNs - startNs, rowCount);
+  }
+
   /** Combine-share: MULTI() with WCOJ + scan sharing + prefix sharing. */
   private TimingResult executeCombineShare(Connection conn, String multiQuery) throws Exception {
     Consumer<RelOptPlanner> hook = planner -> {
@@ -629,24 +398,31 @@ public class WCOJBenchmarkCli {
       printHeader();
     }
 
-    GraphEdge[] graphEdges = generateDenseHubGraph(numNodes, numEdges, seed);
-    GraphSchema schema = new GraphSchema(graphEdges);
-    List<GraphEdge> edgeList = Arrays.asList(graphEdges);
+    // TPC-H connection via model string
+    String model = String.format("{\n"
+        + "  version: '1.0',\n"
+        + "  defaultSchema: 'TPCH',\n"
+        + "  schemas: [\n"
+        + "    {\n"
+        + "      type: 'custom',\n"
+        + "      name: 'TPCH',\n"
+        + "      factory: 'org.apache.calcite.adapter.tpch.TpchSchemaFactory',\n"
+        + "      operand: {\n"
+        + "        columnPrefix: false,\n"
+        + "        scale: %f\n"
+        + "      }\n"
+        + "    }\n"
+        + "  ]\n"
+        + "}", scale);
 
-    // Connect using programmatic schema
     Properties props = new Properties();
-    props.setProperty("lex", "JAVA");
+    props.setProperty("model", "inline:" + model);
 
-    // Collect all results keyed by "shape/mode"
     Map<String, List<TimingResult>> allResults = new LinkedHashMap<>();
 
-    try (Connection rawConn = DriverManager.getConnection("jdbc:calcite:", props)) {
-      CalciteConnection calciteConn = rawConn.unwrap(CalciteConnection.class);
-      SchemaPlus rootSchema = calciteConn.getRootSchema();
-      rootSchema.add("s", new ReflectiveSchemaWithoutRowCount(schema));
-
+    try (Connection conn = DriverManager.getConnection("jdbc:calcite:", props)) {
       for (String shape : getShapes()) {
-        runShape(rawConn, shape, edgeList, allResults);
+        runShape(conn, shape, allResults);
       }
     }
 
@@ -658,12 +434,11 @@ public class WCOJBenchmarkCli {
   }
 
   /** Run warmup + measurement for one query shape. */
-  private void runShape(Connection conn, String shape, List<GraphEdge> edgeList,
+  private void runShape(Connection conn, String shape,
       Map<String, List<TimingResult>> allResults) throws Exception {
 
     if (!csvOutput) {
       System.out.printf("%n--- Shape: %s ---%n", shape);
-      printGraphStats(edgeList, shape);
     }
 
     List<String> singleQueries = generateQueries(shape, queryCount);
@@ -680,6 +455,9 @@ public class WCOJBenchmarkCli {
       if (shouldRun("wcoj")) {
         executeWcoj(conn, singleQueries);
       }
+      if (shouldRun("combine-binary")) {
+        executeCombineBinary(conn, multiQuery);
+      }
       if (shouldRun("combine")) {
         executeCombine(conn, multiQuery);
       }
@@ -695,7 +473,7 @@ public class WCOJBenchmarkCli {
     Thread.sleep(100);
 
     // Measurement
-    String[] modes = {"baseline", "wcoj", "combine", "combine-share"};
+    String[] modes = {"baseline", "wcoj", "combine-binary", "combine", "combine-share"};
     for (String mode : modes) {
       if (!shouldRun(mode)) {
         continue;
@@ -713,6 +491,9 @@ public class WCOJBenchmarkCli {
           break;
         case "wcoj":
           result = executeWcoj(conn, singleQueries);
+          break;
+        case "combine-binary":
+          result = executeCombineBinary(conn, multiQuery);
           break;
         case "combine":
           result = executeCombine(conn, multiQuery);
@@ -743,15 +524,13 @@ public class WCOJBenchmarkCli {
 
   private void printHeader() {
     System.out.println("=================================================================");
-    System.out.println("       WCOJ Benchmark: Baseline vs WCOJ vs Multi-Query WCOJ");
+    System.out.println("  TPC-H WCOJ Benchmark: Cyclic Joins on Realistic Data");
     System.out.println("=================================================================");
     System.out.println();
     System.out.printf("Configuration:%n");
-    System.out.printf("  Nodes:        %d%n", numNodes);
-    System.out.printf("  Edges:        %d (target)%n", numEdges);
-    System.out.printf("  Seed:         %d%n", seed);
-    System.out.printf("  Queries:      %d (variations per shape)%n", queryCount);
+    System.out.printf("  Scale:        %.2f%n", scale);
     System.out.printf("  Shapes:       %s%n", shapeFilter);
+    System.out.printf("  Queries:      %d (variations per shape)%n", queryCount);
     System.out.printf("  Warmup:       %d iterations%n", warmupIterations);
     System.out.printf("  Measurement:  %d iterations%n", measureIterations);
     if (modeFilter != null) {
@@ -788,7 +567,7 @@ public class WCOJBenchmarkCli {
       System.out.printf("                   COMPARISONS (%s)%n", shape);
       System.out.println("=================================================================");
 
-      for (String mode : new String[]{"wcoj", "combine", "combine-share"}) {
+      for (String mode : new String[]{"wcoj", "combine-binary", "combine", "combine-share"}) {
         Stats modeStats = allStats.get(shape + "/" + mode);
         if (modeStats != null) {
           printComparison("baseline", baselineStats, mode, modeStats);
@@ -796,9 +575,13 @@ public class WCOJBenchmarkCli {
       }
 
       Stats wcojStats = allStats.get(shape + "/wcoj");
+      Stats combineBinaryStats = allStats.get(shape + "/combine-binary");
       Stats combineStats = allStats.get(shape + "/combine");
       Stats combineShareStats = allStats.get(shape + "/combine-share");
 
+      if (wcojStats != null && combineBinaryStats != null) {
+        printComparison("wcoj", wcojStats, "combine-binary", combineBinaryStats);
+      }
       if (wcojStats != null && combineStats != null) {
         printComparison("wcoj", wcojStats, "combine", combineStats);
       }
@@ -834,7 +617,6 @@ public class WCOJBenchmarkCli {
   private void printCsvResults(Map<String, List<TimingResult>> allResults) {
     System.out.println("shape,mode,iteration,time_ns,time_ms,rows");
     for (Map.Entry<String, List<TimingResult>> entry : allResults.entrySet()) {
-      // Key format: "shape/mode"
       String[] parts = entry.getKey().split("/", 2);
       String shape = parts[0];
       String mode = parts[1];

@@ -350,3 +350,34 @@ tasks.register<JavaExec>("runWcojBenchmark") {
         args(project.property("wcojBenchmarkArgs").toString().split(" ").filter { it.isNotBlank() })
     }
 }
+
+// Task to run the TPC-H WCOJ benchmark (cyclic joins on realistic data)
+tasks.register<JavaExec>("runTpchWcojBenchmark") {
+    group = "benchmark"
+    description = "Run TPC-H WCOJ benchmark. Usage: ./gradlew :core:runTpchWcojBenchmark -PtpchWcojBenchmarkArgs=\"--scale=0.01\""
+
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.apache.calcite.test.TpchWCOJBenchmarkCli")
+    maxHeapSize = "4g"
+
+    // WCOJ requires this system property to be enabled
+    jvmArgs("-Dcalcite.enable.wcoj=true")
+
+    if (project.hasProperty("tpchWcojBenchmarkArgs")) {
+        args(project.property("tpchWcojBenchmarkArgs").toString().split(" ").filter { it.isNotBlank() })
+    }
+}
+
+// Quick TPC-H query exploration tool
+tasks.register<JavaExec>("exploreTpchQueries") {
+    group = "benchmark"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.apache.calcite.test.TpchQueryExplorer")
+    maxHeapSize = "4g"
+    jvmArgs("-Dcalcite.enable.wcoj=true")
+    if (project.hasProperty("exploreArgs")) {
+        args(project.property("exploreArgs").toString().split(" ").filter { it.isNotBlank() })
+    }
+}

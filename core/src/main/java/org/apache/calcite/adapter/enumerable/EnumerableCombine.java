@@ -30,7 +30,9 @@ import org.apache.calcite.rel.type.RelDataTypeField;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /** Implementation of {@link org.apache.calcite.rel.core.Combine} in
  * {@link org.apache.calcite.adapter.enumerable.EnumerableConvention enumerable calling convention}. */
@@ -56,6 +58,51 @@ public class EnumerableCombine extends Combine implements EnumerableRel {
         Expressions.new_(org.apache.calcite.linq4j.TrieCache.class));
     implementor.setTrieCacheExpr(trieCacheExpr);
 
+    // Pre-materialize table scan inputs shared across WCOJ children.
+    // Collect distinct inputs (by digest) across all WCOJ children,
+    // visit each once, and register the resulting expression on the
+    // implementor. This ensures multiple WCOJ operators that scan the
+    // same table receive the same Enumerable object reference at runtime,
+    // which is required for TrieCache's identity-based (IdentityHashMap)
+    // lookups to hit.
+    final Map<String, RelNode> distinctInputs = new LinkedHashMap<>();
+    for (RelNode child : inputs) {
+      if (child instanceof EnumerableWCOJ) {
+        for (RelNode wcojInput : child.getInputs()) {
+          String digest = wcojInput.getRelDigest().toString();
+          distinctInputs.putIfAbsent(digest, wcojInput);
+        }
+      } else if (child instanceof EnumerableWCOJWithPrefix) {
+        for (RelNode wcojInput : ((EnumerableWCOJWithPrefix) child)
+            .getDelegate().getInputs()) {
+          String digest = wcojInput.getRelDigest().toString();
+          distinctInputs.putIfAbsent(digest, wcojInput);
+        }
+      }
+    }
+    int sharedIdx = 0;
+    for (Map.Entry<String, RelNode> entry : distinctInputs.entrySet()) {
+      EnumerableRel inputRel = (EnumerableRel) entry.getValue();
+      Result inputResult = inputRel.implement(implementor, pref);
+      // Append the block to the Combine's builder so it is evaluated once
+      // and assigned to a local variable that all WCOJ children can reference.
+      Expression sharedExpr = builder.append(
+          "shared" + sharedIdx++, inputResult.block);
+
+      PhysType inputPhysType = inputResult.physType;
+      // Convert to ARRAY format if needed (WCOJ requires Object[] rows)
+      if (inputPhysType.getFormat() != JavaRowFormat.ARRAY) {
+        sharedExpr = inputPhysType.convertTo(sharedExpr, JavaRowFormat.ARRAY);
+        // Re-derive PhysType in ARRAY format
+        inputPhysType = PhysTypeImpl.of(
+            implementor.getTypeFactory(),
+            inputPhysType.getRowType(),
+            JavaRowFormat.ARRAY);
+        sharedExpr = builder.append("sharedArr" + (sharedIdx - 1), sharedExpr);
+      }
+      implementor.registerSharedInput(entry.getKey(), sharedExpr, inputPhysType);
+    }
+
     // Implement each input and collect their results
     // Convert each Enumerable to a List since the row type is STRUCT<QUERY_0: ARRAY<...>, ...>
     for (Ord<RelNode> ord : Ord.zip(inputs)) {
@@ -79,8 +126,10 @@ public class EnumerableCombine extends Combine implements EnumerableRel {
       fieldExpressions.add(listExp);
     }
 
-    // Clear the trie cache and prefix bindings now that all children are implemented
+    // Clear the trie cache, shared inputs, and prefix bindings now that
+    // all children are implemented
     implementor.clearTrieCacheExpr();
+    implementor.clearSharedInputs();
     implementor.clearPrefixBindings();
 
     // The physical type represents the struct of all query results

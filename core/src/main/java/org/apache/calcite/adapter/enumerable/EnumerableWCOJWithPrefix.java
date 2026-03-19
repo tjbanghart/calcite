@@ -126,20 +126,30 @@ public class EnumerableWCOJWithPrefix extends AbstractRelNode
       Prefer pref) {
     final BlockBuilder builder = new BlockBuilder();
 
-    // Visit all input children (same as EnumerableWCOJ)
+    // Visit all input children (same as EnumerableWCOJ).
+    // Check for pre-materialized inputs from the parent Combine first.
     final List<Expression> inputExpressions = new ArrayList<>();
     final List<PhysType> inputPhysTypes = new ArrayList<>();
 
     for (Ord<RelNode> ord : Ord.zip(delegate.getInputs())) {
-      final Result inputResult = implementor.visitChild(this, ord.i,
-          (EnumerableRel) ord.e, pref);
-      inputPhysTypes.add(inputResult.physType);
+      String digest = ord.e.getRelDigest().toString();
+      Expression sharedExpr = implementor.getSharedInputExpr(digest);
+      PhysType sharedPhysType = implementor.getSharedInputPhysType(digest);
 
-      Expression inputExpr = builder.append("input" + ord.i, inputResult.block);
-      if (inputResult.physType.getFormat() != JavaRowFormat.ARRAY) {
-        inputExpr = inputResult.physType.convertTo(inputExpr, JavaRowFormat.ARRAY);
+      if (sharedExpr != null && sharedPhysType != null) {
+        inputPhysTypes.add(sharedPhysType);
+        inputExpressions.add(sharedExpr);
+      } else {
+        final Result inputResult = implementor.visitChild(this, ord.i,
+            (EnumerableRel) ord.e, pref);
+        inputPhysTypes.add(inputResult.physType);
+
+        Expression inputExpr = builder.append("input" + ord.i, inputResult.block);
+        if (inputResult.physType.getFormat() != JavaRowFormat.ARRAY) {
+          inputExpr = inputResult.physType.convertTo(inputExpr, JavaRowFormat.ARRAY);
+        }
+        inputExpressions.add(inputExpr);
       }
-      inputExpressions.add(inputExpr);
     }
 
     final PhysType physType = PhysTypeImpl.of(
@@ -210,15 +220,22 @@ public class EnumerableWCOJWithPrefix extends AbstractRelNode
     final Expression prefixVarArray = Expressions.newArrayInit(
         int.class, 2, prefixVarExprs);
 
-    // Each WCOJ with prefix generates its own prefix computation.
-    // Trie building is shared via TrieCache; only the prefix backtracking
-    // is duplicated across group members (cheap relative to trie construction).
-    final Expression prefixBindingsExpr = Expressions.call(
-        BuiltInMethod.WCOJ_PREFIX.method,
-        inputsList,
-        prefixVarArray,
-        trieCacheArg,
-        Expressions.constant(prefixDepth));
+    // Use getOrCreatePrefixBindings so that the first member of a prefix
+    // group computes the prefix once. The factory appends the method call
+    // to this member's BlockBuilder, creating a declared variable. That
+    // ParameterExpression is cached and returned to subsequent members,
+    // who reference the same variable without re-evaluating the call.
+    // This works because all members' blocks are inlined sequentially
+    // into the parent Combine's block, so the variable is in scope.
+    final Expression prefixBindingsExpr =
+        implementor.getOrCreatePrefixBindings(groupId, () ->
+            builder.append("prefixGroup" + groupId,
+                Expressions.call(
+                    BuiltInMethod.WCOJ_PREFIX.method,
+                    inputsList,
+                    prefixVarArray,
+                    trieCacheArg,
+                    Expressions.constant(prefixDepth))));
 
     // Generate call to wcojWithSharedPrefix
     final Expression wcojCall = Expressions.call(

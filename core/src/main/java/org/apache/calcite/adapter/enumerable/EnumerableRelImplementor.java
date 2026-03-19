@@ -96,6 +96,15 @@ public class EnumerableRelImplementor extends JavaRelImplementor {
    * within a group of WCOJ operators. */
   private final Map<Integer, Expression> prefixBindingsExprs = new HashMap<>();
 
+  /** Pre-materialized input expressions keyed by RelDigest string.
+   * Used by {@link EnumerableCombine} to materialize shared table scans once
+   * so that multiple WCOJ children receive the same object reference,
+   * enabling {@link org.apache.calcite.linq4j.TrieCache} identity-based lookups. */
+  private final Map<String, Expression> sharedInputExprs = new HashMap<>();
+
+  /** PhysTypes for pre-materialized shared inputs, keyed by RelDigest string. */
+  private final Map<String, PhysType> sharedInputPhysTypes = new HashMap<>();
+
   @SuppressWarnings("methodref.receiver.bound.invalid")
   protected final Function1<String, RexToLixTranslator.InputGetter> allCorrelateVariables =
       this::getCorrelVariableGetter;
@@ -531,6 +540,47 @@ public class EnumerableRelImplementor extends JavaRelImplementor {
    */
   public void clearPrefixBindings() {
     prefixBindingsExprs.clear();
+  }
+
+  /**
+   * Registers a pre-materialized input for the given digest.
+   * Called by {@link EnumerableCombine} to share table scan results
+   * across WCOJ children.
+   *
+   * @param digest  the RelDigest string identifying the input
+   * @param expr    the expression (a variable in the Combine's block) holding
+   *                the materialized Enumerable
+   * @param physType the physical type of the input
+   */
+  public void registerSharedInput(String digest, Expression expr,
+      PhysType physType) {
+    sharedInputExprs.put(digest, expr);
+    sharedInputPhysTypes.put(digest, physType);
+  }
+
+  /**
+   * Returns the pre-materialized input expression for the given digest,
+   * or null if not registered.
+   */
+  public @Nullable Expression getSharedInputExpr(String digest) {
+    return sharedInputExprs.get(digest);
+  }
+
+  /**
+   * Returns the PhysType for a pre-materialized input, or null if not
+   * registered.
+   */
+  public @Nullable PhysType getSharedInputPhysType(String digest) {
+    return sharedInputPhysTypes.get(digest);
+  }
+
+  /**
+   * Clears all shared input expressions. Called by Combine after
+   * visiting all children.
+   */
+  public void clearSharedInputs() {
+    sharedInputExprs.clear();
+    sharedInputPhysTypes.clear();
   }
 
   public EnumerableRel.Result result(PhysType physType, BlockStatement block) {

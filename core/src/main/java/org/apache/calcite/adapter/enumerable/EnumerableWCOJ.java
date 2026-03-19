@@ -159,22 +159,35 @@ public class EnumerableWCOJ extends AbstractRelNode implements EnumerableRel {
     final BlockBuilder builder = new BlockBuilder();
 
     // Visit all input children and build expressions
-    // WCOJ requires inputs as Object[] arrays, so we convert to ARRAY format
+    // WCOJ requires inputs as Object[] arrays, so we convert to ARRAY format.
+    // If a parent EnumerableCombine has pre-materialized an input (registered
+    // on the implementor by digest), reuse that expression so that multiple
+    // WCOJ operators within a Combine share the same Enumerable object
+    // reference at runtime. This is required for TrieCache identity lookups.
     final List<Expression> inputExpressions = new ArrayList<>();
     final List<PhysType> inputPhysTypes = new ArrayList<>();
 
     for (Ord<RelNode> ord : Ord.zip(inputs)) {
-      final Result inputResult = implementor.visitChild(this, ord.i,
-          (EnumerableRel) ord.e, pref);
-      inputPhysTypes.add(inputResult.physType);
+      String digest = ord.e.getRelDigest().toString();
+      Expression sharedExpr = implementor.getSharedInputExpr(digest);
+      PhysType sharedPhysType = implementor.getSharedInputPhysType(digest);
 
-      // Convert input to Object[] format if not already
-      Expression inputExpr = builder.append("input" + ord.i, inputResult.block);
-      if (inputResult.physType.getFormat() != JavaRowFormat.ARRAY) {
-        // Convert to array format
-        inputExpr = inputResult.physType.convertTo(inputExpr, JavaRowFormat.ARRAY);
+      if (sharedExpr != null && sharedPhysType != null) {
+        // Reuse pre-materialized input from the Combine's block
+        inputPhysTypes.add(sharedPhysType);
+        inputExpressions.add(sharedExpr);
+      } else {
+        // Fall back to visiting the child directly (standalone WCOJ, no Combine)
+        final Result inputResult = implementor.visitChild(this, ord.i,
+            (EnumerableRel) ord.e, pref);
+        inputPhysTypes.add(inputResult.physType);
+
+        Expression inputExpr = builder.append("input" + ord.i, inputResult.block);
+        if (inputResult.physType.getFormat() != JavaRowFormat.ARRAY) {
+          inputExpr = inputResult.physType.convertTo(inputExpr, JavaRowFormat.ARRAY);
+        }
+        inputExpressions.add(inputExpr);
       }
-      inputExpressions.add(inputExpr);
     }
 
     // Build the PhysType for the output

@@ -1757,4 +1757,146 @@ class EnumerableWCOJTest {
     assertTrue(resultSet.contains("[B, Y]"));
     assertTrue(resultSet.contains("[B, Z]"));
   }
+
+  // =========================================================================
+  // Prefix sharing end-to-end tests (MULTI + Combine + WCOJ)
+  // =========================================================================
+
+  /**
+   * Tests that MULTI() with two WCOJ triangle queries produces correct
+   * results in combine mode (TrieCache sharing) and combine-share mode
+   * (TrieCache + prefix sharing).
+   *
+   * <p>Both queries are triangles on the same edges tables with
+   * different projections. The shared table scans should be materialized
+   * once via TrieCache, and the prefix sharing rule should detect shared
+   * variable prefixes.
+   */
+  @Test void testPrefixSharingMultiQueryCorrectness() {
+    // Q1 and Q2: same triangle, different projections
+    final String q1 =
+        "SELECT e1.src AS a, e1.dst AS b, e2.dst AS c "
+            + "FROM edges1 e1, edges2 e2, edges3 e3 "
+            + "WHERE e1.dst = e2.src AND e2.dst = e3.src AND e3.dst = e1.src";
+
+    final String q2 =
+        "SELECT e1.src AS x, e2.src AS y, e3.src AS z "
+            + "FROM edges1 e1, edges2 e2, edges3 e3 "
+            + "WHERE e1.dst = e2.src AND e2.dst = e3.src AND e3.dst = e1.src";
+
+    final String multiSql = "MULTI((" + q1 + "), (" + q2 + "))";
+
+    // combine-share mode (prefix sharing + TrieCache)
+    // Keep join rules as fallback — WCOJ rule will be preferred for cyclic queries
+    final Consumer<RelOptPlanner> combineShareHook = planner -> {
+      planner.addRule(CoreRules.JOIN_TO_MULTI_JOIN);
+      planner.addRule(EnumerableRules.ENUMERABLE_WCOJ_RULE);
+      planner.addRule(CoreRules.COMBINE_SHARED_COMPONENTS);
+      planner.addRule(EnumerableRules.ENUMERABLE_COMBINE_WCOJ_PREFIX_RULE);
+    };
+
+    tester(new TriangleSchema())
+        .query(multiSql)
+        .withHook(Hook.PLANNER, combineShareHook)
+        .runs();
+
+    // combine mode (TrieCache only, no prefix sharing)
+    final Consumer<RelOptPlanner> combineHook = planner -> {
+      planner.addRule(CoreRules.JOIN_TO_MULTI_JOIN);
+      planner.addRule(EnumerableRules.ENUMERABLE_WCOJ_RULE);
+    };
+
+    tester(new TriangleSchema())
+        .query(multiSql)
+        .withHook(Hook.PLANNER, combineHook)
+        .runs();
+  }
+
+  /**
+   * Tests that MULTI() with three WCOJ triangle queries produces correct
+   * results in combine-share mode. All three share the same tables and
+   * join structure, so prefix sharing should group them.
+   */
+  @Test void testPrefixSharingThreeQueries() {
+    final String q1 =
+        "SELECT e1.src AS a, e1.dst AS b, e2.dst AS c "
+            + "FROM edges1 e1, edges2 e2, edges3 e3 "
+            + "WHERE e1.dst = e2.src AND e2.dst = e3.src AND e3.dst = e1.src";
+
+    final String q2 =
+        "SELECT e1.src AS x, e2.src AS y, e3.src AS z "
+            + "FROM edges1 e1, edges2 e2, edges3 e3 "
+            + "WHERE e1.dst = e2.src AND e2.dst = e3.src AND e3.dst = e1.src";
+
+    final String q3 =
+        "SELECT e3.dst AS p, e1.dst AS q, e2.dst AS r "
+            + "FROM edges1 e1, edges2 e2, edges3 e3 "
+            + "WHERE e1.dst = e2.src AND e2.dst = e3.src AND e3.dst = e1.src";
+
+    final String multiSql =
+        "MULTI((" + q1 + "), (" + q2 + "), (" + q3 + "))";
+
+    final Consumer<RelOptPlanner> combineShareHook = planner -> {
+      planner.addRule(CoreRules.JOIN_TO_MULTI_JOIN);
+      planner.addRule(EnumerableRules.ENUMERABLE_WCOJ_RULE);
+      planner.addRule(CoreRules.COMBINE_SHARED_COMPONENTS);
+      planner.addRule(EnumerableRules.ENUMERABLE_COMBINE_WCOJ_PREFIX_RULE);
+    };
+
+    tester(new TriangleSchema())
+        .query(multiSql)
+        .withHook(Hook.PLANNER, combineShareHook)
+        .runs();
+  }
+
+  /**
+   * Tests that MULTI() with WCOJ and TrieCache sharing produces correct
+   * results. Uses the FK schema with different tables to verify shared
+   * input materialization works across distinct table scans.
+   */
+  @Test void testTrieCacheSharingFkMultiQuery() {
+    // Two FK rectangle queries with different projections
+    final String q1 =
+        "SELECT c.c_custkey, o.o_orderkey, l.l_suppkey, s.s_nationkey "
+            + "FROM customer c, orders o, lineitem l, supplier s "
+            + "WHERE c.c_custkey = o.o_custkey "
+            + "AND o.o_orderkey = l.l_orderkey "
+            + "AND l.l_suppkey = s.s_suppkey "
+            + "AND s.s_nationkey = c.c_nationkey";
+
+    final String q2 =
+        "SELECT s.s_suppkey, l.l_orderkey, o.o_orderkey, c.c_nationkey "
+            + "FROM customer c, orders o, lineitem l, supplier s "
+            + "WHERE c.c_custkey = o.o_custkey "
+            + "AND o.o_orderkey = l.l_orderkey "
+            + "AND l.l_suppkey = s.s_suppkey "
+            + "AND s.s_nationkey = c.c_nationkey";
+
+    final String multiSql = "MULTI((" + q1 + "), (" + q2 + "))";
+
+    // combine mode -- TrieCache sharing only
+    final Consumer<RelOptPlanner> combineHook = planner -> {
+      planner.addRule(CoreRules.JOIN_TO_MULTI_JOIN);
+      planner.addRule(EnumerableRules.ENUMERABLE_WCOJ_RULE);
+    };
+
+    tester(new TpchFkSchema())
+        .query(multiSql)
+        .withHook(Hook.PLANNER, combineHook)
+        .runs();
+
+    // combine-share mode -- TrieCache + prefix sharing
+    final Consumer<RelOptPlanner> combineShareHook = planner -> {
+      planner.addRule(CoreRules.JOIN_TO_MULTI_JOIN);
+      planner.addRule(EnumerableRules.ENUMERABLE_WCOJ_RULE);
+      planner.addRule(CoreRules.COMBINE_SHARED_COMPONENTS);
+      planner.addRule(EnumerableRules.ENUMERABLE_COMBINE_WCOJ_PREFIX_RULE);
+    };
+
+    tester(new TpchFkSchema())
+        .query(multiSql)
+        .withHook(Hook.PLANNER, combineShareHook)
+        .runs();
+  }
+
 }

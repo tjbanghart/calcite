@@ -19,6 +19,7 @@ package org.apache.calcite.test.enumerable;
 import org.apache.calcite.adapter.enumerable.EnumerableConvention;
 import org.apache.calcite.adapter.enumerable.EnumerableRules;
 import org.apache.calcite.adapter.enumerable.EnumerableWCOJ;
+import org.apache.calcite.adapter.enumerable.EnumerableWCOJRule;
 import org.apache.calcite.adapter.enumerable.JoinVariableFingerprint;
 import org.apache.calcite.adapter.enumerable.WCOJPrefixAnalyzer;
 import org.apache.calcite.config.CalciteConnectionProperty;
@@ -350,6 +351,81 @@ class EnumerableWCOJTest {
           .query(triangleQuery)
           .runs();
     }
+  }
+
+  /**
+   * Tests GYO reduction for alpha-acyclicity detection.
+   *
+   * <p>Verifies that the triangle R(x,y), S(y,z), T(z,x) is correctly
+   * detected as alpha-cyclic, but adding U(x,y,z) makes it alpha-acyclic
+   * (U is an ear covering all shared vertices). Also tests 4-cycle and
+   * star patterns. The previous Berge-cyclicity test (clique expansion +
+   * |E| &ge; |V|) would incorrectly classify the triangle+U case as cyclic.
+   */
+  @Test void testAlphaCyclicityDetection() {
+    // Use vertex indices: x=0, y=1, z=2
+
+    // Triangle: R(x,y), S(y,z), T(z,x) — alpha-cyclic
+    List<Set<Integer>> triangle = Arrays.asList(
+        new HashSet<>(Arrays.asList(0, 1)),  // R: {x, y}
+        new HashSet<>(Arrays.asList(1, 2)),  // S: {y, z}
+        new HashSet<>(Arrays.asList(2, 0))); // T: {z, x}
+    assertThat("Triangle should be alpha-cyclic",
+        EnumerableWCOJRule.isAlphaCyclic(triangle), is(true));
+
+    // Triangle + covering hyperedge: R(x,y), S(y,z), T(z,x), U(x,y,z)
+    // Alpha-acyclic: U is an ear (its shared vertices {x,y,z} are each
+    // covered by another hyperedge). After removing U, the remaining
+    // triangle's hyperedges can be removed one by one.
+    List<Set<Integer>> triangleWithCover = Arrays.asList(
+        new HashSet<>(Arrays.asList(0, 1)),     // R: {x, y}
+        new HashSet<>(Arrays.asList(1, 2)),     // S: {y, z}
+        new HashSet<>(Arrays.asList(2, 0)),     // T: {z, x}
+        new HashSet<>(Arrays.asList(0, 1, 2))); // U: {x, y, z}
+    assertThat("Triangle + covering hyperedge should be alpha-acyclic",
+        EnumerableWCOJRule.isAlphaCyclic(triangleWithCover), is(false));
+
+    // 4-cycle: A(x,y), B(y,z), C(z,w), D(w,x) — alpha-cyclic
+    // w=3
+    List<Set<Integer>> fourCycle = Arrays.asList(
+        new HashSet<>(Arrays.asList(0, 1)),  // A: {x, y}
+        new HashSet<>(Arrays.asList(1, 2)),  // B: {y, z}
+        new HashSet<>(Arrays.asList(2, 3)),  // C: {z, w}
+        new HashSet<>(Arrays.asList(3, 0))); // D: {w, x}
+    assertThat("4-cycle should be alpha-cyclic",
+        EnumerableWCOJRule.isAlphaCyclic(fourCycle), is(true));
+
+    // Star: R(x,a), S(x,b), T(x,c) — alpha-acyclic (tree structure)
+    // a=1, b=2, c=3 (x=0)
+    List<Set<Integer>> star = Arrays.asList(
+        new HashSet<>(Arrays.asList(0, 1)),  // R: {x, a}
+        new HashSet<>(Arrays.asList(0, 2)),  // S: {x, b}
+        new HashSet<>(Arrays.asList(0, 3))); // T: {x, c}
+    assertThat("Star query should be alpha-acyclic",
+        EnumerableWCOJRule.isAlphaCyclic(star), is(false));
+
+    // FK triangle: lineitem-partsupp-supplier on partkey and suppkey.
+    // Hyperedges: {l,ps} for partkey, {l,ps,s} for suppkey (ternary
+    // because l.suppkey = ps.suppkey = s.suppkey merges into one class).
+    // {l,ps} is an ear witnessed by {l,ps,s}. Alpha-acyclic.
+    // This validates the paper's claim in Section 7.2.4.
+    // Using l=0, ps=1, s=2.
+    List<Set<Integer>> fkTriangle = Arrays.asList(
+        new HashSet<>(Arrays.asList(0, 1)),     // partkey: {l, ps}
+        new HashSet<>(Arrays.asList(0, 1, 2))); // suppkey: {l, ps, s}
+    assertThat("FK triangle (l-ps-s) should be alpha-acyclic",
+        EnumerableWCOJRule.isAlphaCyclic(fkTriangle), is(false));
+
+    // FK rectangle: customer-orders-lineitem-supplier on
+    // custkey, orderkey, suppkey, nationkey — alpha-cyclic (true 4-cycle).
+    // c=0, o=1, l=2, s=3
+    List<Set<Integer>> fkRectangle = Arrays.asList(
+        new HashSet<>(Arrays.asList(0, 1)),  // custkey: {c, o}
+        new HashSet<>(Arrays.asList(1, 2)),  // orderkey: {o, l}
+        new HashSet<>(Arrays.asList(2, 3)),  // suppkey: {l, s}
+        new HashSet<>(Arrays.asList(3, 0))); // nationkey: {s, c}
+    assertThat("FK rectangle (c-o-l-s) should be alpha-cyclic",
+        EnumerableWCOJRule.isAlphaCyclic(fkRectangle), is(true));
   }
 
   private CalciteAssert.AssertThat tester(Object schema) {
@@ -857,6 +933,779 @@ class EnumerableWCOJTest {
         null, prefixBindings, 1);
 
     assertTrue(result.toList().isEmpty());
+  }
+
+  // =========================================================================
+  // TPC-H cyclic join tests
+  // =========================================================================
+
+  /** Lineitem-like row for TPC-H self-join tests. */
+  public static class TpchLineitem {
+    public final int l_orderkey;
+    public final int l_suppkey;
+    public final int l_partkey;
+    public final double l_quantity;
+
+    public TpchLineitem(int l_orderkey, int l_suppkey, int l_partkey,
+        double l_quantity) {
+      this.l_orderkey = l_orderkey;
+      this.l_suppkey = l_suppkey;
+      this.l_partkey = l_partkey;
+      this.l_quantity = l_quantity;
+    }
+  }
+
+  /** Schema with lineitem-like table for TPC-H self-join cycle tests. */
+  public static class TpchLineitemSchema {
+    public final TpchLineitem[] lineitem = {
+        new TpchLineitem(1, 10, 100, 5.0),
+        new TpchLineitem(1, 20, 200, 3.0),
+        new TpchLineitem(2, 20, 100, 7.0),
+        new TpchLineitem(3, 30, 300, 1.0),
+    };
+  }
+
+  /** Larger lineitem schema (8 rows) for exercising WCOJ backtracking. */
+  public static class TpchLineitemSchemaLarge {
+    public final TpchLineitem[] lineitem = {
+        new TpchLineitem(1, 10, 100, 5.0),
+        new TpchLineitem(1, 20, 200, 3.0),
+        new TpchLineitem(2, 20, 100, 7.0),
+        new TpchLineitem(3, 30, 300, 1.0),
+        new TpchLineitem(1, 30, 300, 2.0),
+        new TpchLineitem(2, 10, 200, 4.0),
+        new TpchLineitem(3, 20, 100, 6.0),
+        new TpchLineitem(4, 40, 400, 8.0),
+    };
+  }
+
+  // =========================================================================
+  // TPC-H multi-table POJOs for FK cycle tests
+  // =========================================================================
+
+  /** Supplier for FK cycle tests. */
+  public static class TpchFkSupplier {
+    public final int s_suppkey;
+    public final int s_nationkey;
+
+    public TpchFkSupplier(int s_suppkey, int s_nationkey) {
+      this.s_suppkey = s_suppkey;
+      this.s_nationkey = s_nationkey;
+    }
+  }
+
+  /** Customer for FK cycle tests. */
+  public static class TpchFkCustomer {
+    public final int c_custkey;
+    public final int c_nationkey;
+
+    public TpchFkCustomer(int c_custkey, int c_nationkey) {
+      this.c_custkey = c_custkey;
+      this.c_nationkey = c_nationkey;
+    }
+  }
+
+  /** Orders for FK cycle tests. */
+  public static class TpchFkOrders {
+    public final int o_orderkey;
+    public final int o_custkey;
+
+    public TpchFkOrders(int o_orderkey, int o_custkey) {
+      this.o_orderkey = o_orderkey;
+      this.o_custkey = o_custkey;
+    }
+  }
+
+  /** Nation for FK cycle tests. */
+  public static class TpchFkNation {
+    public final int n_nationkey;
+    public final String n_name;
+
+    public TpchFkNation(int n_nationkey, String n_name) {
+      this.n_nationkey = n_nationkey;
+      this.n_name = n_name;
+    }
+  }
+
+  /**
+   * Multi-table TPC-H schema for FK cycle tests.
+   *
+   * <p>Data is designed so that FK cycles close:
+   * <ul>
+   *   <li>FK rectangle (c-o-l-s): 4 valid cycles via nationkey</li>
+   *   <li>FK diamond (c-o-l-s-n): 4 valid cycles via nation table</li>
+   * </ul>
+   */
+  public static class TpchFkSchema {
+    public final TpchLineitem[] lineitem = {
+        new TpchLineitem(1, 10, 500, 5.0),
+        new TpchLineitem(1, 20, 600, 3.0),
+        new TpchLineitem(2, 10, 500, 7.0),
+        new TpchLineitem(3, 30, 700, 1.0),
+    };
+
+    public final TpchFkSupplier[] supplier = {
+        new TpchFkSupplier(10, 1),
+        new TpchFkSupplier(20, 1),
+        new TpchFkSupplier(30, 2),
+    };
+
+    public final TpchFkCustomer[] customer = {
+        new TpchFkCustomer(100, 1),
+        new TpchFkCustomer(200, 2),
+    };
+
+    public final TpchFkOrders[] orders = {
+        new TpchFkOrders(1, 100),
+        new TpchFkOrders(2, 100),
+        new TpchFkOrders(3, 200),
+    };
+
+    public final TpchFkNation[] nation = {
+        new TpchFkNation(1, "USA"),
+        new TpchFkNation(2, "CANADA"),
+    };
+  }
+
+  /**
+   * Tests TPC-H self-join triangle via WCOJ runtime.
+   *
+   * <p>Pattern: l1.orderkey = l2.orderkey AND l2.suppkey = l3.suppkey
+   * AND l3.partkey = l1.partkey (closing the cycle).
+   *
+   * <p>With 4 rows, produces 4 self-triangles (each row matches itself)
+   * plus 1 cross-triangle: l1=(1,10,100), l2=(1,20,200), l3=(2,20,100).
+   */
+  @Test void testTpchSelfJoinTriangle() {
+    // Lineitem-like data: (orderkey, suppkey, partkey)
+    List<Object[]> lineitem = Arrays.asList(
+        new Object[]{1, 10, 100},   // A
+        new Object[]{1, 20, 200},   // B
+        new Object[]{2, 20, 100},   // C
+        new Object[]{3, 30, 300});  // D
+
+    // Self-join: all 3 inputs use the same data
+    List<Enumerable<Object[]>> inputs = Arrays.asList(
+        Linq4j.asEnumerable(lineitem),
+        Linq4j.asEnumerable(lineitem),
+        Linq4j.asEnumerable(lineitem));
+
+    List<int[]> joinKeyIndices = Arrays.asList(
+        new int[]{0, 2},  // l1: orderkey=0, partkey=2
+        new int[]{0, 1},  // l2: orderkey=0, suppkey=1
+        new int[]{1, 2}); // l3: suppkey=1, partkey=2
+
+    // Var 0 (orderkey): l1.ok(0,0) = l2.ok(1,0)
+    // Var 1 (suppkey):  l2.sk(1,1) = l3.sk(2,1)
+    // Var 2 (partkey):  l3.pk(2,2) = l1.pk(0,2)
+    int[][] variableToInputs = new int[][]{
+        {0, 0, 1, 0},  // orderkey: input 0 field 0 = input 1 field 0
+        {1, 1, 2, 1},  // suppkey:  input 1 field 1 = input 2 field 1
+        {2, 2, 0, 2}   // partkey:  input 2 field 2 = input 0 field 2
+    };
+
+    Function1<Object[][], Object[]> resultSelector = inputRows -> {
+      Object[] l1 = inputRows[0];
+      Object[] l2 = inputRows[1];
+      Object[] l3 = inputRows[2];
+      return new Object[]{l1[0], l2[1], l3[2]};  // ok, sk, pk
+    };
+
+    Enumerable<Object[]> result = EnumerableDefaults.wcoj(
+        inputs, joinKeyIndices, variableToInputs, resultSelector);
+
+    List<Object[]> resultList = result.toList();
+
+    // 4 self-triangles (A,A,A), (B,B,B), (C,C,C), (D,D,D)
+    // + 1 cross-triangle (A,B,C): ok=1, sk=20, pk=100
+    assertThat(resultList.size(), is(5));
+
+    // Verify the cross-triangle exists (the TPC-H-like pattern)
+    Set<String> resultSet = new HashSet<>();
+    for (Object[] row : resultList) {
+      resultSet.add(Arrays.toString(row));
+    }
+    // Cross-triangle: l1=A(ok=1), l2=B(sk=20), l3=C(pk=100)
+    assertTrue(resultSet.contains("[1, 20, 100]"),
+        "Should find cross-triangle (ok=1, sk=20, pk=100)");
+  }
+
+  /**
+   * Tests TPC-H self-join 4-cycle via WCOJ runtime.
+   *
+   * <p>Pattern: l1.suppkey = l2.suppkey AND l2.orderkey = l3.orderkey
+   * AND l3.partkey = l4.partkey AND l4.orderkey = l1.orderkey
+   */
+  @Test void testTpchSelfJoinFourCycle() {
+    List<Object[]> lineitem = Arrays.asList(
+        new Object[]{1, 10, 100},   // A: ok=1, sk=10, pk=100
+        new Object[]{2, 10, 200});  // B: ok=2, sk=10, pk=200
+
+    List<Enumerable<Object[]>> inputs = Arrays.asList(
+        Linq4j.asEnumerable(lineitem),
+        Linq4j.asEnumerable(lineitem),
+        Linq4j.asEnumerable(lineitem),
+        Linq4j.asEnumerable(lineitem));
+
+    List<int[]> joinKeyIndices = Arrays.asList(
+        new int[]{0, 1},  // l1: ok, sk
+        new int[]{0, 1},  // l2: ok, sk
+        new int[]{0, 2},  // l3: ok, pk
+        new int[]{0, 2}); // l4: ok, pk
+
+    // Var 0 (sk):  l1.sk(0,1) = l2.sk(1,1)
+    // Var 1 (ok2): l2.ok(1,0) = l3.ok(2,0)
+    // Var 2 (pk):  l3.pk(2,2) = l4.pk(3,2)
+    // Var 3 (ok1): l4.ok(3,0) = l1.ok(0,0)
+    int[][] variableToInputs = new int[][]{
+        {0, 1, 1, 1},  // sk:  input 0 field 1 = input 1 field 1
+        {1, 0, 2, 0},  // ok2: input 1 field 0 = input 2 field 0
+        {2, 2, 3, 2},  // pk:  input 2 field 2 = input 3 field 2
+        {3, 0, 0, 0}   // ok1: input 3 field 0 = input 0 field 0
+    };
+
+    Function1<Object[][], Object[]> resultSelector = inputRows -> {
+      Object[] l1 = inputRows[0];
+      Object[] l4 = inputRows[3];
+      return new Object[]{l1[0], l1[1], l4[0], l4[2]};
+    };
+
+    Enumerable<Object[]> result = EnumerableDefaults.wcoj(
+        inputs, joinKeyIndices, variableToInputs, resultSelector);
+
+    List<Object[]> resultList = result.toList();
+
+    // Both rows share sk=10, but each row's ok and pk form
+    // independent self-cycles only (no cross-cycle with 2 rows)
+    assertThat(resultList.size(), is(2));
+
+    Set<String> resultSet = new HashSet<>();
+    for (Object[] row : resultList) {
+      resultSet.add(Arrays.toString(row));
+    }
+    assertTrue(resultSet.contains("[1, 10, 1, 100]"),
+        "Self-cycle for row A");
+    assertTrue(resultSet.contains("[2, 10, 2, 200]"),
+        "Self-cycle for row B");
+  }
+
+  /**
+   * Tests FK-style triangle with 3 different tables via WCOJ runtime.
+   *
+   * <p>Pattern: orders.o_id = lineitem.l_orderkey
+   * AND lineitem.l_suppkey = cust_supplier.cs_suppkey
+   * AND cust_supplier.cs_custkey = orders.o_custkey
+   */
+  @Test void testTpchFkTriangle() {
+    List<Object[]> orders = Arrays.asList(
+        new Object[]{1, 100},   // o_id=1, o_custkey=100
+        new Object[]{2, 200});  // o_id=2, o_custkey=200
+
+    List<Object[]> lineitem = Arrays.asList(
+        new Object[]{1, 10},    // l_orderkey=1, l_suppkey=10
+        new Object[]{2, 20});   // l_orderkey=2, l_suppkey=20
+
+    List<Object[]> custSupplier = Arrays.asList(
+        new Object[]{100, 10},  // cs_custkey=100, cs_suppkey=10
+        new Object[]{200, 30}); // cs_custkey=200, cs_suppkey=30 (no match)
+
+    List<Enumerable<Object[]>> inputs = Arrays.asList(
+        Linq4j.asEnumerable(orders),
+        Linq4j.asEnumerable(lineitem),
+        Linq4j.asEnumerable(custSupplier));
+
+    List<int[]> joinKeyIndices = Arrays.asList(
+        new int[]{0, 1},  // orders: o_id=0, o_custkey=1
+        new int[]{0, 1},  // lineitem: l_orderkey=0, l_suppkey=1
+        new int[]{0, 1}); // cust_supplier: cs_custkey=0, cs_suppkey=1
+
+    // Var 0 (orderkey): orders.o_id(0,0) = lineitem.l_orderkey(1,0)
+    // Var 1 (suppkey):  lineitem.l_suppkey(1,1) = cust_supplier.cs_suppkey(2,1)
+    // Var 2 (custkey):  cust_supplier.cs_custkey(2,0) = orders.o_custkey(0,1)
+    int[][] variableToInputs = new int[][]{
+        {0, 0, 1, 0},  // orderkey
+        {1, 1, 2, 1},  // suppkey
+        {2, 0, 0, 1}   // custkey
+    };
+
+    Function1<Object[][], Object[]> resultSelector = inputRows -> {
+      Object[] o = inputRows[0];
+      Object[] l = inputRows[1];
+      Object[] cs = inputRows[2];
+      return new Object[]{o[0], l[1], cs[0]};  // o_id, l_suppkey, cs_custkey
+    };
+
+    Enumerable<Object[]> result = EnumerableDefaults.wcoj(
+        inputs, joinKeyIndices, variableToInputs, resultSelector);
+
+    List<Object[]> resultList = result.toList();
+
+    // Only 1 FK triangle closes:
+    // orders(1,100) -> lineitem(1,10) -> cust_supplier(100,10) -> custkey=100
+    // orders(2,200) -> lineitem(2,20) -> no cust_supplier with sk=20
+    assertThat(resultList.size(), is(1));
+    assertThat(resultList.get(0)[0], is(1));    // o_id
+    assertThat(resultList.get(0)[1], is(10));   // l_suppkey
+    assertThat(resultList.get(0)[2], is(100));  // cs_custkey
+  }
+
+  /**
+   * Tests FK-style 4-cycle with 4 different tables via WCOJ runtime.
+   *
+   * <p>Pattern: orders.o_id = lineitem.l_orderkey
+   * AND lineitem.l_suppkey = partsupp.ps_suppkey
+   * AND partsupp.ps_partkey = supp_cust.sc_partkey
+   * AND supp_cust.sc_custkey = orders.o_custkey
+   */
+  @Test void testTpchFkFourCycle() {
+    List<Object[]> orders = Arrays.asList(
+        new Object[]{1, 100},    // o_id=1, o_custkey=100
+        new Object[]{2, 200});   // o_id=2, o_custkey=200
+
+    List<Object[]> lineitem = Arrays.asList(
+        new Object[]{1, 10},     // l_orderkey=1, l_suppkey=10
+        new Object[]{2, 20});    // l_orderkey=2, l_suppkey=20
+
+    List<Object[]> partsupp = Arrays.asList(
+        new Object[]{10, 500},   // ps_suppkey=10, ps_partkey=500
+        new Object[]{20, 600});  // ps_suppkey=20, ps_partkey=600
+
+    List<Object[]> suppCust = Arrays.asList(
+        new Object[]{500, 100},  // sc_partkey=500, sc_custkey=100
+        new Object[]{600, 300}); // sc_partkey=600, sc_custkey=300 (no match)
+
+    List<Enumerable<Object[]>> inputs = Arrays.asList(
+        Linq4j.asEnumerable(orders),
+        Linq4j.asEnumerable(lineitem),
+        Linq4j.asEnumerable(partsupp),
+        Linq4j.asEnumerable(suppCust));
+
+    List<int[]> joinKeyIndices = Arrays.asList(
+        new int[]{0, 1},  // orders: o_id=0, o_custkey=1
+        new int[]{0, 1},  // lineitem: l_orderkey=0, l_suppkey=1
+        new int[]{0, 1},  // partsupp: ps_suppkey=0, ps_partkey=1
+        new int[]{0, 1}); // supp_cust: sc_partkey=0, sc_custkey=1
+
+    // Var 0 (orderkey): orders.o_id(0,0) = lineitem.l_orderkey(1,0)
+    // Var 1 (suppkey):  lineitem.l_suppkey(1,1) = partsupp.ps_suppkey(2,0)
+    // Var 2 (partkey):  partsupp.ps_partkey(2,1) = supp_cust.sc_partkey(3,0)
+    // Var 3 (custkey):  supp_cust.sc_custkey(3,1) = orders.o_custkey(0,1)
+    int[][] variableToInputs = new int[][]{
+        {0, 0, 1, 0},  // orderkey
+        {1, 1, 2, 0},  // suppkey
+        {2, 1, 3, 0},  // partkey
+        {3, 1, 0, 1}   // custkey
+    };
+
+    Function1<Object[][], Object[]> resultSelector = inputRows -> {
+      Object[] o = inputRows[0];
+      Object[] l = inputRows[1];
+      Object[] ps = inputRows[2];
+      Object[] sc = inputRows[3];
+      return new Object[]{o[0], l[1], ps[1], sc[1]};
+    };
+
+    Enumerable<Object[]> result = EnumerableDefaults.wcoj(
+        inputs, joinKeyIndices, variableToInputs, resultSelector);
+
+    List<Object[]> resultList = result.toList();
+
+    // Only 1 cycle closes: orders(1,100)->lineitem(1,10)->partsupp(10,500)
+    //   ->supp_cust(500,100)->orders.custkey=100 ✓
+    // The second path: orders(2,200)->lineitem(2,20)->partsupp(20,600)
+    //   ->supp_cust(600,300)->orders.custkey=300 ✗ (no match)
+    assertThat(resultList.size(), is(1));
+    assertThat(resultList.get(0)[0], is(1));    // o_id
+    assertThat(resultList.get(0)[1], is(10));   // l_suppkey
+    assertThat(resultList.get(0)[2], is(500));  // ps_partkey
+    assertThat(resultList.get(0)[3], is(100));  // sc_custkey
+  }
+
+  /**
+   * Tests that WCOJ handles a self-join triangle where no cross-row
+   * triangles exist, only self-matches.
+   */
+  @Test void testTpchSelfJoinNoTriangles() {
+    // Rows share no keys across different rows
+    List<Object[]> lineitem = Arrays.asList(
+        new Object[]{1, 10, 100},
+        new Object[]{2, 20, 200},
+        new Object[]{3, 30, 300});
+
+    List<Enumerable<Object[]>> inputs = Arrays.asList(
+        Linq4j.asEnumerable(lineitem),
+        Linq4j.asEnumerable(lineitem),
+        Linq4j.asEnumerable(lineitem));
+
+    List<int[]> joinKeyIndices = Arrays.asList(
+        new int[]{0, 2},
+        new int[]{0, 1},
+        new int[]{1, 2});
+
+    int[][] variableToInputs = new int[][]{
+        {0, 0, 1, 0},
+        {1, 1, 2, 1},
+        {2, 2, 0, 2}
+    };
+
+    Function1<Object[][], Object[]> resultSelector = inputRows ->
+        new Object[]{inputRows[0][0], inputRows[1][1], inputRows[2][2]};
+
+    Enumerable<Object[]> result = EnumerableDefaults.wcoj(
+        inputs, joinKeyIndices, variableToInputs, resultSelector);
+
+    List<Object[]> resultList = result.toList();
+
+    // Each row forms a self-triangle only (no cross-row sharing)
+    assertThat(resultList.size(), is(3));
+  }
+
+  /**
+   * Tests FK-style rectangle (customer-orders-lineitem-supplier) via WCOJ runtime.
+   *
+   * <p>Pattern: c.c_custkey = o.o_custkey AND o.o_orderkey = l.l_orderkey
+   * AND l.l_suppkey = s.s_suppkey AND s.s_nationkey = c.c_nationkey
+   *
+   * <p>This is the query shape from Table 6 in the paper where WCOJ is 1.5x
+   * slower than binary joins due to the low-cardinality nationkey closing predicate.
+   */
+  @Test void testTpchFkRectangleNationkey() {
+    List<Object[]> customer = Arrays.asList(
+        new Object[]{100, 1},   // c_custkey=100, c_nationkey=1
+        new Object[]{200, 2});  // c_custkey=200, c_nationkey=2
+
+    List<Object[]> orders = Arrays.asList(
+        new Object[]{1, 100},   // o_orderkey=1, o_custkey=100
+        new Object[]{2, 100},   // o_orderkey=2, o_custkey=100
+        new Object[]{3, 200});  // o_orderkey=3, o_custkey=200
+
+    List<Object[]> lineitem = Arrays.asList(
+        new Object[]{1, 10},    // l_orderkey=1, l_suppkey=10
+        new Object[]{1, 20},    // l_orderkey=1, l_suppkey=20
+        new Object[]{2, 10},    // l_orderkey=2, l_suppkey=10
+        new Object[]{3, 30});   // l_orderkey=3, l_suppkey=30
+
+    List<Object[]> supplier = Arrays.asList(
+        new Object[]{10, 1},    // s_suppkey=10, s_nationkey=1
+        new Object[]{20, 1},    // s_suppkey=20, s_nationkey=1
+        new Object[]{30, 2});   // s_suppkey=30, s_nationkey=2
+
+    List<Enumerable<Object[]>> inputs = Arrays.asList(
+        Linq4j.asEnumerable(customer),
+        Linq4j.asEnumerable(orders),
+        Linq4j.asEnumerable(lineitem),
+        Linq4j.asEnumerable(supplier));
+
+    // Join keys ordered by variable participation:
+    // customer: c_custkey for v0, c_nationkey for v3
+    // orders: o_custkey for v0, o_orderkey for v1
+    // lineitem: l_orderkey for v1, l_suppkey for v2
+    // supplier: s_suppkey for v2, s_nationkey for v3
+    List<int[]> joinKeyIndices = Arrays.asList(
+        new int[]{0, 1},  // customer: custkey, nationkey
+        new int[]{1, 0},  // orders: custkey, orderkey
+        new int[]{0, 1},  // lineitem: orderkey, suppkey
+        new int[]{0, 1}); // supplier: suppkey, nationkey
+
+    // Var 0 (custkey): customer(0,0) = orders(1,1)
+    // Var 1 (orderkey): orders(1,0) = lineitem(2,0)
+    // Var 2 (suppkey): lineitem(2,1) = supplier(3,0)
+    // Var 3 (nationkey): supplier(3,1) = customer(0,1)
+    int[][] variableToInputs = new int[][]{
+        {0, 0, 1, 1},  // custkey
+        {1, 0, 2, 0},  // orderkey
+        {2, 1, 3, 0},  // suppkey
+        {3, 1, 0, 1}   // nationkey
+    };
+
+    Function1<Object[][], Object[]> resultSelector = inputRows -> {
+      Object[] c = inputRows[0];
+      Object[] o = inputRows[1];
+      Object[] l = inputRows[2];
+      Object[] s = inputRows[3];
+      return new Object[]{c[0], o[0], l[1], s[1]};
+    };
+
+    Enumerable<Object[]> result = EnumerableDefaults.wcoj(
+        inputs, joinKeyIndices, variableToInputs, resultSelector);
+
+    List<Object[]> resultList = result.toList();
+
+    // 4 valid cycles:
+    // c(100,1)->o(1,100)->l(1,10)->s(10,1)->nk=1=c.nk ✓
+    // c(100,1)->o(1,100)->l(1,20)->s(20,1)->nk=1=c.nk ✓
+    // c(100,1)->o(2,100)->l(2,10)->s(10,1)->nk=1=c.nk ✓
+    // c(200,2)->o(3,200)->l(3,30)->s(30,2)->nk=2=c.nk ✓
+    assertThat(resultList.size(), is(4));
+
+    Set<String> resultSet = new HashSet<>();
+    for (Object[] row : resultList) {
+      resultSet.add(Arrays.toString(row));
+    }
+    // (c_custkey, o_orderkey, l_suppkey, s_nationkey)
+    assertTrue(resultSet.contains("[100, 1, 10, 1]"));
+    assertTrue(resultSet.contains("[100, 1, 20, 1]"));
+    assertTrue(resultSet.contains("[100, 2, 10, 1]"));
+    assertTrue(resultSet.contains("[200, 3, 30, 2]"));
+  }
+
+  /**
+   * Tests FK-style diamond (customer-orders-lineitem-supplier-nation)
+   * via WCOJ runtime. This is a 5-input cyclic join.
+   *
+   * <p>Pattern: c.c_custkey = o.o_custkey AND o.o_orderkey = l.l_orderkey
+   * AND l.l_suppkey = s.s_suppkey AND s.s_nationkey = n.n_nationkey
+   * AND n.n_nationkey = c.c_nationkey
+   *
+   * <p>The nationkey variable spans 3 inputs (supplier, nation, customer),
+   * testing WCOJ with ternary hyperedge intersection.
+   */
+  @Test void testTpchFkDiamond() {
+    List<Object[]> customer = Arrays.asList(
+        new Object[]{100, 1},      // c_custkey=100, c_nationkey=1
+        new Object[]{200, 2});     // c_custkey=200, c_nationkey=2
+
+    List<Object[]> orders = Arrays.asList(
+        new Object[]{1, 100},
+        new Object[]{2, 100},
+        new Object[]{3, 200});
+
+    List<Object[]> lineitem = Arrays.asList(
+        new Object[]{1, 10},
+        new Object[]{1, 20},
+        new Object[]{2, 10},
+        new Object[]{3, 30});
+
+    List<Object[]> supplier = Arrays.asList(
+        new Object[]{10, 1},
+        new Object[]{20, 1},
+        new Object[]{30, 2});
+
+    List<Object[]> nation = Arrays.asList(
+        new Object[]{1, "USA"},
+        new Object[]{2, "CANADA"});
+
+    List<Enumerable<Object[]>> inputs = Arrays.asList(
+        Linq4j.asEnumerable(customer),
+        Linq4j.asEnumerable(orders),
+        Linq4j.asEnumerable(lineitem),
+        Linq4j.asEnumerable(supplier),
+        Linq4j.asEnumerable(nation));
+
+    List<int[]> joinKeyIndices = Arrays.asList(
+        new int[]{0, 1},  // customer: custkey(v0), nationkey(v3)
+        new int[]{1, 0},  // orders: custkey(v0), orderkey(v1)
+        new int[]{0, 1},  // lineitem: orderkey(v1), suppkey(v2)
+        new int[]{0, 1},  // supplier: suppkey(v2), nationkey(v3)
+        new int[]{0});    // nation: nationkey(v3)
+
+    // Var 3 (nationkey) spans 3 inputs: supplier(3,1), nation(4,0), customer(0,1)
+    int[][] variableToInputs = new int[][]{
+        {0, 0, 1, 1},           // custkey
+        {1, 0, 2, 0},           // orderkey
+        {2, 1, 3, 0},           // suppkey
+        {3, 1, 4, 0, 0, 1}      // nationkey (ternary)
+    };
+
+    Function1<Object[][], Object[]> resultSelector = inputRows -> {
+      Object[] c = inputRows[0];
+      Object[] o = inputRows[1];
+      Object[] l = inputRows[2];
+      Object[] s = inputRows[3];
+      Object[] n = inputRows[4];
+      return new Object[]{c[0], o[0], l[1], s[1], n[1]};
+    };
+
+    Enumerable<Object[]> result = EnumerableDefaults.wcoj(
+        inputs, joinKeyIndices, variableToInputs, resultSelector);
+
+    List<Object[]> resultList = result.toList();
+
+    // Same 4 cycles as FK rectangle, but through nation table
+    assertThat(resultList.size(), is(4));
+
+    Set<String> resultSet = new HashSet<>();
+    for (Object[] row : resultList) {
+      resultSet.add(Arrays.toString(row));
+    }
+    // (c_custkey, o_orderkey, l_suppkey, s_nationkey, n_name)
+    assertTrue(resultSet.contains("[100, 1, 10, 1, USA]"));
+    assertTrue(resultSet.contains("[100, 1, 20, 1, USA]"));
+    assertTrue(resultSet.contains("[100, 2, 10, 1, USA]"));
+    assertTrue(resultSet.contains("[200, 3, 30, 2, CANADA]"));
+  }
+
+  /**
+   * SQL-level test: TPC-H self-join triangle detected as cyclic
+   * and executed via the planner pipeline.
+   */
+  @Test void testTpchSelfJoinTriangleSql() {
+    final String sql =
+        "SELECT l1.l_orderkey, l2.l_suppkey, l3.l_partkey "
+            + "FROM lineitem l1, lineitem l2, lineitem l3 "
+            + "WHERE l1.l_orderkey = l2.l_orderkey "
+            + "AND l2.l_suppkey = l3.l_suppkey "
+            + "AND l3.l_partkey = l1.l_partkey";
+
+    tester(new TpchLineitemSchema())
+        .query(sql)
+        .withHook(Hook.PLANNER, (Consumer<RelOptPlanner>) planner -> {
+          planner.addRule(CoreRules.JOIN_TO_MULTI_JOIN);
+          planner.addRule(EnumerableRules.ENUMERABLE_WCOJ_RULE);
+        })
+        .runs();
+  }
+
+  /**
+   * SQL-level test: TPC-H self-join 4-cycle query.
+   */
+  @Test void testTpchSelfJoinFourCycleSql() {
+    final String sql =
+        "SELECT l1.l_orderkey, l2.l_suppkey, "
+            + "l3.l_partkey, l4.l_orderkey AS ok4 "
+            + "FROM lineitem l1, lineitem l2, "
+            + "lineitem l3, lineitem l4 "
+            + "WHERE l1.l_suppkey = l2.l_suppkey "
+            + "AND l2.l_orderkey = l3.l_orderkey "
+            + "AND l3.l_partkey = l4.l_partkey "
+            + "AND l4.l_orderkey = l1.l_orderkey";
+
+    tester(new TpchLineitemSchema())
+        .query(sql)
+        .withHook(Hook.PLANNER, (Consumer<RelOptPlanner>) planner -> {
+          planner.addRule(CoreRules.JOIN_TO_MULTI_JOIN);
+          planner.addRule(EnumerableRules.ENUMERABLE_WCOJ_RULE);
+        })
+        .runs();
+  }
+
+  /**
+   * SQL-level test: TPC-H self-join triangle with result count verification.
+   *
+   * <p>4 self-triangles (each row matches itself) plus 1 cross-triangle:
+   * l1=(1,10,100), l2=(1,20,200), l3=(2,20,100). Total: 5 rows.
+   */
+  @Test void testTpchSelfJoinTriangleSqlVerified() {
+    final String sql =
+        "SELECT l1.l_orderkey, l2.l_suppkey, l3.l_partkey "
+            + "FROM lineitem l1, lineitem l2, lineitem l3 "
+            + "WHERE l1.l_orderkey = l2.l_orderkey "
+            + "AND l2.l_suppkey = l3.l_suppkey "
+            + "AND l3.l_partkey = l1.l_partkey";
+
+    tester(new TpchLineitemSchema())
+        .query(sql)
+        .withHook(Hook.PLANNER, (Consumer<RelOptPlanner>) planner -> {
+          planner.addRule(CoreRules.JOIN_TO_MULTI_JOIN);
+          planner.addRule(EnumerableRules.ENUMERABLE_WCOJ_RULE);
+        })
+        .returnsCount(5);
+  }
+
+  /**
+   * SQL-level test: TPC-H self-join 4-cycle with result count verification.
+   *
+   * <p>Uses the 4-row lineitem schema. Produces 8 valid 4-tuples:
+   * 4 self-cycles (A,A,A,A), (B,B,B,B), (C,C,C,C), (D,D,D,D) plus
+   * 4 cross-cycles: (A,A,B,B) from sk=10, plus (B,B,A,A), (B,C,C,A),
+   * and (C,B,A,C) from sk=20.
+   */
+  @Test void testTpchSelfJoinFourCycleSqlVerified() {
+    final String sql =
+        "SELECT l1.l_orderkey, l2.l_suppkey, "
+            + "l3.l_partkey, l4.l_orderkey AS ok4 "
+            + "FROM lineitem l1, lineitem l2, "
+            + "lineitem l3, lineitem l4 "
+            + "WHERE l1.l_suppkey = l2.l_suppkey "
+            + "AND l2.l_orderkey = l3.l_orderkey "
+            + "AND l3.l_partkey = l4.l_partkey "
+            + "AND l4.l_orderkey = l1.l_orderkey";
+
+    tester(new TpchLineitemSchema())
+        .query(sql)
+        .withHook(Hook.PLANNER, (Consumer<RelOptPlanner>) planner -> {
+          planner.addRule(CoreRules.JOIN_TO_MULTI_JOIN);
+          planner.addRule(EnumerableRules.ENUMERABLE_WCOJ_RULE);
+        })
+        .returnsCount(8);
+  }
+
+  /**
+   * SQL-level test: self-join triangle with 8-row dataset.
+   *
+   * <p>Exercises WCOJ backtracking more thoroughly with overlapping
+   * key groups across multiple orderkey, suppkey, and partkey values.
+   * Produces 17 valid triangles including cross-row matches.
+   */
+  @Test void testTpchSelfJoinTriangleLargerData() {
+    final String sql =
+        "SELECT l1.l_orderkey, l2.l_suppkey, l3.l_partkey "
+            + "FROM lineitem l1, lineitem l2, lineitem l3 "
+            + "WHERE l1.l_orderkey = l2.l_orderkey "
+            + "AND l2.l_suppkey = l3.l_suppkey "
+            + "AND l3.l_partkey = l1.l_partkey";
+
+    tester(new TpchLineitemSchemaLarge())
+        .query(sql)
+        .withHook(Hook.PLANNER, (Consumer<RelOptPlanner>) planner -> {
+          planner.addRule(CoreRules.JOIN_TO_MULTI_JOIN);
+          planner.addRule(EnumerableRules.ENUMERABLE_WCOJ_RULE);
+        })
+        .returnsCount(17);
+  }
+
+  /**
+   * SQL-level test: FK rectangle (customer-orders-lineitem-supplier).
+   *
+   * <p>4-table cycle closed by nationkey: s.s_nationkey = c.c_nationkey.
+   * This is the query shape from Table 6 in the paper where binary joins
+   * outperform WCOJ (1.5x slower) due to the low-cardinality closing
+   * predicate. Tests that the planner pipeline handles FK cycles correctly.
+   */
+  @Test void testTpchFkRectangleSql() {
+    final String sql =
+        "SELECT c.c_custkey, o.o_orderkey, l.l_suppkey, s.s_nationkey "
+            + "FROM customer c, orders o, lineitem l, supplier s "
+            + "WHERE c.c_custkey = o.o_custkey "
+            + "AND o.o_orderkey = l.l_orderkey "
+            + "AND l.l_suppkey = s.s_suppkey "
+            + "AND s.s_nationkey = c.c_nationkey";
+
+    tester(new TpchFkSchema())
+        .query(sql)
+        .withHook(Hook.PLANNER, (Consumer<RelOptPlanner>) planner -> {
+          planner.addRule(CoreRules.JOIN_TO_MULTI_JOIN);
+          planner.addRule(EnumerableRules.ENUMERABLE_WCOJ_RULE);
+        })
+        .returnsCount(4);
+  }
+
+  /**
+   * SQL-level test: FK diamond (customer-orders-lineitem-supplier-nation).
+   *
+   * <p>5-table cycle through the nation table. This is the query shape
+   * showing the worst WCOJ regression (3.9x slower) in the paper's
+   * TPC-H benchmarks (Table 6). Tests the full planner pipeline with
+   * 5-way cyclic FK joins.
+   */
+  @Test void testTpchFkDiamondSql() {
+    final String sql =
+        "SELECT c.c_custkey, o.o_orderkey, l.l_suppkey, "
+            + "s.s_nationkey, n.n_name "
+            + "FROM customer c, orders o, lineitem l, supplier s, nation n "
+            + "WHERE c.c_custkey = o.o_custkey "
+            + "AND o.o_orderkey = l.l_orderkey "
+            + "AND l.l_suppkey = s.s_suppkey "
+            + "AND s.s_nationkey = n.n_nationkey "
+            + "AND n.n_nationkey = c.c_nationkey";
+
+    tester(new TpchFkSchema())
+        .query(sql)
+        .withHook(Hook.PLANNER, (Consumer<RelOptPlanner>) planner -> {
+          planner.addRule(CoreRules.JOIN_TO_MULTI_JOIN);
+          planner.addRule(EnumerableRules.ENUMERABLE_WCOJ_RULE);
+        })
+        .returnsCount(4);
   }
 
   /**

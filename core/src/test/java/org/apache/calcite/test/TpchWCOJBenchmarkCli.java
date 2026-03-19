@@ -46,7 +46,15 @@ import java.util.function.Consumer;
  *   <li><b>rectangle</b>: lineitem self-join 4-cycle
  *       (suppkey-orderkey-partkey-orderkey, 1.2M rows at SF=0.01)</li>
  *   <li><b>fk-triangle</b>: lineitem-partsupp-supplier foreign-key triangle
- *       (partkey-suppkey cycle, 301K rows at SF=0.01)</li>
+ *       (partkey-suppkey cycle, 301K rows at SF=0.01).
+ *       <b>Note:</b> alpha-acyclic per GYO reduction; excluded from
+ *       ALL_SHAPES. Use {@code --shape=fk-triangle --mode=baseline}.</li>
+ *   <li><b>fk-rectangle</b>: customer-orders-lineitem-supplier 4-cycle
+ *       (nationkey closes cycle, 11.7K rows at SF=0.01)</li>
+ *   <li><b>fk-diamond</b>: customer-orders-lineitem-supplier-nation
+ *       5-table cycle (nationkey routed through nation table,
+ *       11.7K rows at SF=0.01). Called "diamond" by convention
+ *       despite having 5 tables in the cycle.</li>
  * </ul>
  *
  * <p>Requires {@code -Dcalcite.enable.wcoj=true} JVM argument.
@@ -76,9 +84,15 @@ public class TpchWCOJBenchmarkCli {
   private int measureIterations = 10;
   private String modeFilter = null;
   private boolean csvOutput = false;
-  private boolean verbose = true;
+  private boolean verbose = false;
 
-  private static final String[] ALL_SHAPES = {"triangle", "rectangle", "fk-triangle"};
+  // fk-triangle is omitted: GYO reduction correctly identifies it as
+  // alpha-acyclic (the suppkey equivalence class creates a ternary hyperedge
+  // that witnesses the binary partkey hyperedge), so the WCOJ rule does not
+  // fire. Running it in WCOJ mode would crash because binary join rules are
+  // removed. Use --shape=fk-triangle with --mode=baseline to run it.
+  private static final String[] ALL_SHAPES =
+      {"triangle", "rectangle", "fk-rectangle", "fk-diamond"};
 
   public static void main(String[] args) throws Exception {
     boolean wcojEnabled =
@@ -126,7 +140,7 @@ public class TpchWCOJBenchmarkCli {
     System.out.println();
     System.out.println("Options:");
     System.out.println("  --scale=N        TPC-H scale factor (default: 0.01)");
-    System.out.println("  --shape=SHAPE    Query shape: triangle|rectangle|fk-triangle|all (default: all)");
+    System.out.println("  --shape=SHAPE    Query shape: triangle|rectangle|fk-triangle|fk-rectangle|fk-diamond|all (default: all)");
     System.out.println("  --queries=N      Query variations for multi modes (default: 5)");
     System.out.println("  --warmup=N       Warmup iterations (default: 10)");
     System.out.println("  --iterations=N   Measurement iterations (default: 10)");
@@ -173,6 +187,32 @@ public class TpchWCOJBenchmarkCli {
       "l.l_partkey = ps.ps_partkey"
           + " AND ps.ps_suppkey = s.s_suppkey"
           + " AND l.l_suppkey = s.s_suppkey";
+
+  // --- FK-Rectangle: customer-orders-lineitem-supplier (nationkey cycle) ---
+  // c-o on custkey, o-l on orderkey, l-s on suppkey,
+  // s-c on nationkey → closes 4-cycle
+  // Low-cardinality closing predicate (nationkey has 25 values)
+  // lets binary joins prune early; WCOJ pays intersection cost regardless.
+  private static final String FK_RECTANGLE_FROM =
+      "customer c, orders o, lineitem l, supplier s";
+  private static final String FK_RECTANGLE_WHERE =
+      "c.c_custkey = o.o_custkey"
+          + " AND o.o_orderkey = l.l_orderkey"
+          + " AND l.l_suppkey = s.s_suppkey"
+          + " AND s.s_nationkey = c.c_nationkey";
+
+  // --- FK-Diamond: customer-orders-lineitem-supplier-nation (5-table cycle) ---
+  // Same as FK-Rectangle but routes through the nation table,
+  // adding a 5th table to the cycle: c-o-l-s-n-c
+  // Even more WCOJ overhead from the extra intersection level.
+  private static final String FK_DIAMOND_FROM =
+      "customer c, orders o, lineitem l, supplier s, nation n";
+  private static final String FK_DIAMOND_WHERE =
+      "c.c_custkey = o.o_custkey"
+          + " AND o.o_orderkey = l.l_orderkey"
+          + " AND l.l_suppkey = s.s_suppkey"
+          + " AND s.s_nationkey = n.n_nationkey"
+          + " AND n.n_nationkey = c.c_nationkey";
 
   // ---------------------------------------------------------------
   // Query variations (5 per shape, different projections)
@@ -238,6 +278,46 @@ public class TpchWCOJBenchmarkCli {
     }
   }
 
+  private String fkRectangleVariation(int index) {
+    switch (index % 5) {
+    case 0:
+      return "SELECT c.c_name, o.o_orderdate, l.l_quantity, s.s_name "
+          + "FROM " + FK_RECTANGLE_FROM + " WHERE " + FK_RECTANGLE_WHERE;
+    case 1:
+      return "SELECT c.c_custkey, o.o_totalprice, l.l_extendedprice, s.s_acctbal "
+          + "FROM " + FK_RECTANGLE_FROM + " WHERE " + FK_RECTANGLE_WHERE;
+    case 2:
+      return "SELECT o.o_orderkey, l.l_partkey, l.l_suppkey, c.c_nationkey "
+          + "FROM " + FK_RECTANGLE_FROM + " WHERE " + FK_RECTANGLE_WHERE;
+    case 3:
+      return "SELECT s.s_suppkey, l.l_discount, o.o_orderstatus, c.c_mktsegment "
+          + "FROM " + FK_RECTANGLE_FROM + " WHERE " + FK_RECTANGLE_WHERE;
+    default:
+      return "SELECT c.c_name, l.l_shipdate, s.s_nationkey, o.o_orderpriority "
+          + "FROM " + FK_RECTANGLE_FROM + " WHERE " + FK_RECTANGLE_WHERE;
+    }
+  }
+
+  private String fkDiamondVariation(int index) {
+    switch (index % 5) {
+    case 0:
+      return "SELECT c.c_name, o.o_orderdate, l.l_quantity, s.s_name, n.n_name "
+          + "FROM " + FK_DIAMOND_FROM + " WHERE " + FK_DIAMOND_WHERE;
+    case 1:
+      return "SELECT c.c_custkey, o.o_totalprice, l.l_extendedprice, s.s_acctbal, n.n_regionkey "
+          + "FROM " + FK_DIAMOND_FROM + " WHERE " + FK_DIAMOND_WHERE;
+    case 2:
+      return "SELECT o.o_orderkey, l.l_partkey, s.s_suppkey, n.n_name, c.c_nationkey "
+          + "FROM " + FK_DIAMOND_FROM + " WHERE " + FK_DIAMOND_WHERE;
+    case 3:
+      return "SELECT s.s_name, l.l_discount, o.o_orderstatus, n.n_regionkey, c.c_mktsegment "
+          + "FROM " + FK_DIAMOND_FROM + " WHERE " + FK_DIAMOND_WHERE;
+    default:
+      return "SELECT n.n_name, c.c_name, l.l_shipdate, s.s_nationkey, o.o_orderpriority "
+          + "FROM " + FK_DIAMOND_FROM + " WHERE " + FK_DIAMOND_WHERE;
+    }
+  }
+
   private String queryVariation(String shape, int index) {
     switch (shape) {
     case "triangle":
@@ -246,6 +326,10 @@ public class TpchWCOJBenchmarkCli {
       return rectangleVariation(index);
     case "fk-triangle":
       return fkTriangleVariation(index);
+    case "fk-rectangle":
+      return fkRectangleVariation(index);
+    case "fk-diamond":
+      return fkDiamondVariation(index);
     default:
       throw new IllegalArgumentException("Unknown shape: " + shape);
     }

@@ -238,46 +238,117 @@ public class EnumerableWCOJRule extends ConverterRule {
   }
 
   /**
-   * Checks if the join graph is cyclic.
+   * Checks if the join hypergraph is alpha-cyclic using GYO reduction.
    *
-   * <p>A join graph is cyclic if the number of edges (equi-join conditions)
-   * is greater than or equal to the number of nodes (inputs) for a connected graph.
-   * For WCOJ to be beneficial, we specifically look for true cycles.
+   * <p>Alpha-acyclicity (the standard notion in database theory) is tested by
+   * repeatedly removing "ear" hyperedges. A hyperedge H is an ear if every
+   * vertex in H that also appears in some other hyperedge is contained within
+   * a single other hyperedge (the "witness"). If GYO reduction eliminates all
+   * hyperedges, the hypergraph is alpha-acyclic; otherwise it is alpha-cyclic.
+   *
+   * <p>This is strictly more permissive than the previous Berge-cyclicity test
+   * (clique expansion + |E| &ge; |V|). For example, the query
+   * R(x,y), S(y,z), T(z,x), U(x,y,z) is alpha-acyclic (U is an ear covering
+   * the variables of R, S, and T) but Berge-cyclic. The two notions coincide
+   * when all hyperedges have degree 2.
    */
   private boolean isCyclicJoinGraph(JoinGraph graph, int numInputs) {
-    // Build adjacency list
-    final Set<Integer>[] adjacency = new Set[numInputs];
-    for (int i = 0; i < numInputs; i++) {
-      adjacency[i] = new HashSet<>();
+    // Build hyperedges: each JoinVariable's set of input indices
+    final List<Set<Integer>> hyperedges = new ArrayList<>();
+    for (EnumerableWCOJ.JoinVariable var : graph.variables) {
+      final Set<Integer> inputs = new HashSet<>();
+      for (Pair<Integer, Integer> occ : var.occurrences) {
+        inputs.add(occ.left);
+      }
+      hyperedges.add(inputs);
     }
 
-    // Add edges from variables
-    for (EnumerableWCOJ.JoinVariable var : graph.variables) {
-      Set<Integer> inputsInVar = new HashSet<>();
-      for (Pair<Integer, Integer> occ : var.occurrences) {
-        inputsInVar.add(occ.left);
-      }
+    return isAlphaCyclic(hyperedges);
+  }
 
-      // Add edges between all pairs of inputs in this variable
-      List<Integer> inputList = new ArrayList<>(inputsInVar);
-      for (int i = 0; i < inputList.size(); i++) {
-        for (int j = i + 1; j < inputList.size(); j++) {
-          adjacency[inputList.get(i)].add(inputList.get(j));
-          adjacency[inputList.get(j)].add(inputList.get(i));
+  /**
+   * Tests whether a join hypergraph is alpha-cyclic using GYO reduction.
+   *
+   * <p>Alpha-acyclicity (the standard notion in database theory) is tested by
+   * repeatedly removing "ear" hyperedges. A hyperedge H is an ear if every
+   * vertex in H that also appears in some other hyperedge is contained within
+   * a single other hyperedge (the "witness"). If GYO reduction eliminates all
+   * hyperedges, the hypergraph is alpha-acyclic; otherwise it is alpha-cyclic.
+   *
+   * <p>This is strictly more permissive than a Berge-cyclicity test
+   * (clique expansion + |E| &ge; |V|). For example, the query
+   * R(x,y), S(y,z), T(z,x), U(x,y,z) is alpha-acyclic (U is an ear covering
+   * the variables of R, S, and T) but Berge-cyclic. The two notions coincide
+   * when all hyperedges have degree 2.
+   *
+   * @param hyperedges list of hyperedges, each a set of vertex indices
+   * @return true if the hypergraph is alpha-cyclic
+   */
+  public static boolean isAlphaCyclic(List<Set<Integer>> hyperedges) {
+    // GYO reduction: repeatedly remove ears until no more can be found
+    final boolean[] removed = new boolean[hyperedges.size()];
+    boolean changed = true;
+    while (changed) {
+      changed = false;
+      for (int i = 0; i < hyperedges.size(); i++) {
+        if (removed[i]) {
+          continue;
+        }
+        if (isEar(i, hyperedges, removed)) {
+          removed[i] = true;
+          changed = true;
         }
       }
     }
 
-    // Count edges (undirected)
-    int edgeCount = 0;
-    for (int i = 0; i < numInputs; i++) {
-      edgeCount += adjacency[i].size();
+    // If any hyperedge remains, the hypergraph is alpha-cyclic
+    for (int i = 0; i < hyperedges.size(); i++) {
+      if (!removed[i]) {
+        return true;
+      }
     }
-    edgeCount /= 2;  // Each edge counted twice
+    return false;
+  }
 
-    // For a connected graph, it's cyclic if edges >= nodes
-    // A tree has exactly (nodes - 1) edges
-    return edgeCount >= numInputs;
+  /**
+   * Tests whether hyperedge {@code idx} is an ear in the current hypergraph.
+   *
+   * <p>A hyperedge H is an ear if there exists a single other hyperedge W
+   * (the witness) such that every vertex in H that also appears in any other
+   * remaining hyperedge is contained in W.
+   */
+  private static boolean isEar(int idx, List<Set<Integer>> hyperedges,
+      boolean[] removed) {
+    final Set<Integer> h = hyperedges.get(idx);
+
+    // Collect vertices of H that appear in at least one other remaining hyperedge
+    final Set<Integer> sharedVertices = new HashSet<>();
+    for (int j = 0; j < hyperedges.size(); j++) {
+      if (j == idx || removed[j]) {
+        continue;
+      }
+      for (int v : h) {
+        if (hyperedges.get(j).contains(v)) {
+          sharedVertices.add(v);
+        }
+      }
+    }
+
+    // If no vertices are shared, H is trivially an ear (isolated hyperedge)
+    if (sharedVertices.isEmpty()) {
+      return true;
+    }
+
+    // Check if some single other hyperedge contains all shared vertices
+    for (int j = 0; j < hyperedges.size(); j++) {
+      if (j == idx || removed[j]) {
+        continue;
+      }
+      if (hyperedges.get(j).containsAll(sharedVertices)) {
+        return true;  // Found a witness
+      }
+    }
+    return false;
   }
 
   /**

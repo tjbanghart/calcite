@@ -1,0 +1,45 @@
+% Prevent section headings from appearing at the bottom of a page without content
+\usepackage{titlesec}
+\titlespacing*{\section}{0pt}{3.5ex plus 1ex minus .2ex}{2.3ex plus .2ex}
+\titlespacing*{\subsection}{0pt}{3.25ex plus 1ex minus .2ex}{1.5ex plus .2ex}
+\titlespacing*{\subsubsection}{0pt}{3.25ex plus 1ex minus .2ex}{1.5ex plus .2ex}
+
+% Keep at least 4 lines with a heading before allowing a page break
+\newcommand{\needlines}[1]{\needspace{#1\baselineskip}}
+\usepackage{needspace}
+\makeatletter
+\renewcommand\section{\@startsection {section}{1}{\z@}%
+  {-3.5ex \@plus -1ex \@minus -.2ex}%
+  {2.3ex \@plus.2ex}%
+  {\needspace{6\baselineskip}\normalfont\Large\bfseries}}
+\renewcommand\subsection{\@startsection{subsection}{2}{\z@}%
+  {-3.25ex\@plus -1ex \@minus -.2ex}%
+  {1.5ex \@plus .2ex}%
+  {\needspace{5\baselineskip}\normalfont\large\bfseries}}
+\renewcommand\subsubsection{\@startsection{subsubsection}{3}{\z@}%
+  {-3.25ex\@plus -1ex \@minus -.2ex}%
+  {1.5ex \@plus .2ex}%
+  {\needspace{4\baselineskip}\normalfont\normalsize\bfseries}}
+% Make \paragraph render as a block heading (for #### in markdown)
+\renewcommand\paragraph{\@startsection{paragraph}{4}{\z@}%
+  {2.25ex \@plus 1ex \@minus .2ex}%
+  {0.5ex \@plus .2ex}%
+  {\needspace{3\baselineskip}\normalfont\normalsize\bfseries}}
+\makeatother
+
+% Constrain images: never wider than text, scale height proportionally
+\usepackage{graphicx}
+\makeatletter
+\def\maxwidth{\ifdim\Gin@nat@width>\linewidth\linewidth\else\Gin@nat@width\fi}
+\def\maxheight{\ifdim\Gin@nat@height>0.45\textheight 0.45\textheight\else\Gin@nat@height\fi}
+\makeatother
+\setkeys{Gin}{width=\maxwidth,height=\maxheight,keepaspectratio}
+
+% Discourage widows and orphans
+\widowpenalty=10000
+\clubpenalty=10000
+
+% For the title header banner
+\usepackage{xcolor}
+\usepackage{url}
+\definecolor{titlebg}{HTML}{D8E2EE}
